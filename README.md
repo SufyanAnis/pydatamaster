@@ -50,18 +50,28 @@ Environment variables (all optional except where noted):
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | first admin account, used only when the DB is created |
 | `ANTHROPIC_API_KEY` (or `GEMINI_API_KEY`) | AI tutor provider key (can also be set in Admin -> Settings) |
 
-### Option A - Railway (simplest)
+### Option A - Hostinger (Node.js Web App, Business/Cloud plans)
+1. hPanel -> **Websites -> Add Website -> Deploy Web App -> Import Git Repository**, connect GitHub and pick this repo (branch `main`).
+2. Build settings: framework **Express** (or *Other*), **Node.js 24**, build command `npm run build`, entry file `index.mjs`.
+3. Environment variables:
+   - `DB_PATH=~/pydatamaster-data/pydatamaster.db` (keeps the database outside the app folder so redeploys never wipe it)
+   - `ADMIN_PASSWORD=<strong password>` (and `ADMIN_EMAIL` if you want a different login)
+   - `NODE_OPTIONS=--no-warnings=ExperimentalWarning` (optional, silences the SQLite notice in logs)
+   - `ANTHROPIC_API_KEY=<key>` (optional, enables the conversational AI tutor)
+4. Click **Deploy**. Every push to `main` redeploys automatically. Site: `https://<your-domain>/`, admin: `https://<your-domain>/admin`.
+
+### Option B - Railway
 1. Push this folder to a GitHub repository.
 2. In Railway: **New Project -> Deploy from GitHub repo** (it picks up the `Dockerfile` via `railway.json`).
 3. Service -> **Volumes -> Add volume**, mount path `/data`.
 4. Service -> **Variables**: `DB_PATH=/data/pydatamaster.db`, `ADMIN_PASSWORD=<strong password>`, optionally `ANTHROPIC_API_KEY`.
 5. Settings -> **Networking -> Generate domain**. Site is at `https://<domain>/`, admin at `https://<domain>/admin`.
 
-### Option B - Render
+### Option C - Render
 1. Push to GitHub, then in Render choose **New -> Blueprint** and select the repo (`render.yaml` defines the service, disk and env vars).
 2. Fill in `ADMIN_PASSWORD` (and `ANTHROPIC_API_KEY` if you have one) when prompted. Persistent disks require the Starter plan.
 
-### Option C - Fly.io
+### Option D - Fly.io
 ```bash
 fly launch --copy-config --no-deploy      # uses fly.toml
 fly volumes create pdm_data --size 1
@@ -69,7 +79,7 @@ fly secrets set ADMIN_PASSWORD=... ANTHROPIC_API_KEY=...
 fly deploy
 ```
 
-### Option D - Any VPS with Docker
+### Option E - Any VPS with Docker (including Hostinger VPS via Docker Manager)
 ```bash
 docker compose up -d --build              # serves on port 4000; put Caddy/Nginx in front for HTTPS
 ```

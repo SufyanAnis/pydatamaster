@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -8,7 +9,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(here, "..", "data");
 fs.mkdirSync(dataDir, { recursive: true });
 
-export const DB_PATH = process.env.DB_PATH || path.join(dataDir, "pydatamaster.db");
+/** Expands a leading "~" or "$HOME" so DB_PATH can point into the hosting user's home directory. */
+function expandHome(p: string): string {
+  const home = os.homedir();
+  if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) return path.join(home, p.slice(1));
+  return p.replace(/^\$HOME(?=[\\/])/, home);
+}
+
+export const DB_PATH = process.env.DB_PATH ? expandHome(process.env.DB_PATH) : path.join(dataDir, "pydatamaster.db");
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 export const db = new DatabaseSync(DB_PATH);
 
