@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import type { Request, Response, NextFunction } from "express";
-import { db } from "./db.js";
+import { q } from "./db.js";
 import { getSetting, setSetting } from "./settings.js";
 import type { PublicUser, Role, UserStatus } from "./types.js";
 
@@ -19,17 +19,17 @@ export const COOKIE_NAME = "pdm_token";
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 let cachedSecret: string | null = null;
-export function getJwtSecret(): string {
+export async function getJwtSecret(): Promise<string> {
   if (cachedSecret) return cachedSecret;
   const fromEnv = process.env.JWT_SECRET?.trim();
   if (fromEnv) {
     cachedSecret = fromEnv;
     return cachedSecret;
   }
-  let stored = getSetting<string>("jwt_secret", "");
+  let stored = await getSetting<string>("jwt_secret", "");
   if (!stored) {
     stored = crypto.randomBytes(48).toString("hex");
-    setSetting("jwt_secret", stored);
+    await setSetting("jwt_secret", stored);
   }
   cachedSecret = stored;
   return cachedSecret;
@@ -64,12 +64,12 @@ export function toPublicUser(row: UserRow): PublicUser {
   };
 }
 
-export function findUserById(id: number): UserRow | undefined {
-  return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as UserRow | undefined;
+export function findUserById(id: number): Promise<UserRow | undefined> {
+  return q.get<UserRow>("SELECT * FROM users WHERE id = ?", [id]);
 }
 
-export function findUserByEmail(email: string): UserRow | undefined {
-  return db.prepare("SELECT * FROM users WHERE lower(email) = lower(?)").get(email) as UserRow | undefined;
+export function findUserByEmail(email: string): Promise<UserRow | undefined> {
+  return q.get<UserRow>("SELECT * FROM users WHERE lower(email) = lower(?)", [email]);
 }
 
 export async function hashPassword(plain: string): Promise<string> {
@@ -80,8 +80,8 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
   return bcrypt.compare(plain, hash);
 }
 
-export function signToken(userId: number): string {
-  return jwt.sign({ sub: String(userId) }, getJwtSecret(), { expiresIn: "30d" });
+export async function signToken(userId: number): Promise<string> {
+  return jwt.sign({ sub: String(userId) }, await getJwtSecret(), { expiresIn: "30d" });
 }
 
 /**
@@ -104,16 +104,20 @@ export function clearAuthCookie(res: Response): void {
 }
 
 /** Reads the auth cookie (or Bearer header) and attaches req.user when valid. */
-export function attachUser(req: Request, _res: Response, next: NextFunction): void {
+export async function attachUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const bearer = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : undefined;
   const token = (req.cookies?.[COOKIE_NAME] as string | undefined) || bearer;
-  if (!token) return next();
+  if (!token) {
+    next();
+    return;
+  }
   try {
-    const payload = jwt.verify(token, getJwtSecret()) as { sub?: string };
+    const payload = jwt.verify(token, await getJwtSecret()) as { sub?: string };
     const id = Number(payload.sub);
-    if (!Number.isFinite(id)) return next();
-    const row = findUserById(id);
-    if (row && row.status === "active") req.user = toPublicUser(row);
+    if (Number.isFinite(id)) {
+      const row = await findUserById(id);
+      if (row && row.status === "active") req.user = toPublicUser(row);
+    }
   } catch {
     // invalid/expired token: treat as anonymous
   }

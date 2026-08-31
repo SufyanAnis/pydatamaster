@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { db, nowIso } from "../db.js";
+import { q, nowIso } from "../db.js";
 import {
   clearAuthCookie,
   findUserByEmail,
@@ -30,7 +30,7 @@ const signupSchema = z.object({
 });
 
 authRouter.post("/signup", async (req, res) => {
-  const site = getSiteSettings();
+  const site = await getSiteSettings();
   if (!site.features.signup) {
     res.status(403).json({ error: "Sign-ups are currently closed." });
     return;
@@ -43,22 +43,21 @@ authRouter.post("/signup", async (req, res) => {
   const { name, email, password } = parsed.data;
   const goal = GOALS.includes(parsed.data.goal ?? "") ? parsed.data.goal! : GOALS[0];
   const level = LEVELS.includes(parsed.data.level ?? "") ? parsed.data.level! : LEVELS[0];
-  if (findUserByEmail(email)) {
+  if (await findUserByEmail(email)) {
     res.status(409).json({ error: "An account with this email already exists. Try logging in." });
     return;
   }
   const now = nowIso();
-  const result = db
-    .prepare(
-      `INSERT INTO users (name, email, password_hash, role, goal, level, status, avatar_color, created_at, last_login_at)
-       VALUES (?, ?, ?, 'learner', ?, ?, 'active', ?, ?, ?)`,
-    )
-    .run(name, email.toLowerCase(), await hashPassword(password), goal, level, pickAvatarColor(email), now, now);
+  const result = await q.run(
+    `INSERT INTO users (name, email, password_hash, role, goal, level, status, avatar_color, created_at, last_login_at)
+     VALUES (?, ?, ?, 'learner', ?, ?, 'active', ?, ?, ?)`,
+    [name, email.toLowerCase(), await hashPassword(password), goal, level, pickAvatarColor(email), now, now],
+  );
   const id = Number(result.lastInsertRowid);
-  db.prepare("INSERT INTO activity (user_id, type, ref_id, xp, created_at) VALUES (?, 'joined', NULL, 25, ?)").run(id, now);
-  setAuthCookie(req, res, signToken(id));
-  const row = findUserById(id)!;
-  res.status(201).json({ user: toPublicUser(row), progress: computeProgress(id) });
+  await q.run("INSERT INTO activity (user_id, type, ref_id, xp, created_at) VALUES (?, 'joined', NULL, 25, ?)", [id, now]);
+  setAuthCookie(req, res, await signToken(id));
+  const row = (await findUserById(id))!;
+  res.status(201).json({ user: toPublicUser(row), progress: await computeProgress(id) });
 });
 
 const loginSchema = z.object({ email: z.string().trim().email(), password: z.string().min(1) });
@@ -69,7 +68,7 @@ authRouter.post("/login", async (req, res) => {
     res.status(400).json({ error: "Enter your email and password." });
     return;
   }
-  const row = findUserByEmail(parsed.data.email);
+  const row = await findUserByEmail(parsed.data.email);
   if (!row || !(await verifyPassword(parsed.data.password, row.password_hash))) {
     res.status(401).json({ error: "Incorrect email or password." });
     return;
@@ -78,9 +77,9 @@ authRouter.post("/login", async (req, res) => {
     res.status(403).json({ error: "This account has been suspended. Contact support." });
     return;
   }
-  db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(nowIso(), row.id);
-  setAuthCookie(req, res, signToken(row.id));
-  res.json({ user: toPublicUser({ ...row, last_login_at: nowIso() }), progress: computeProgress(row.id) });
+  await q.run("UPDATE users SET last_login_at = ? WHERE id = ?", [nowIso(), row.id]);
+  setAuthCookie(req, res, await signToken(row.id));
+  res.json({ user: toPublicUser({ ...row, last_login_at: nowIso() }), progress: await computeProgress(row.id) });
 });
 
 authRouter.post("/logout", (_req, res) => {
@@ -88,12 +87,12 @@ authRouter.post("/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
-authRouter.get("/me", (req, res) => {
+authRouter.get("/me", async (req, res) => {
   if (!req.user) {
     res.json({ user: null, progress: null });
     return;
   }
-  res.json({ user: req.user, progress: computeProgress(req.user.id) });
+  res.json({ user: req.user, progress: await computeProgress(req.user.id) });
 });
 
 const updateSchema = z.object({
@@ -110,19 +109,19 @@ authRouter.patch("/me", requireAuth, async (req, res) => {
     res.status(400).json({ error: "Invalid profile data." });
     return;
   }
-  const row = findUserById(req.user!.id)!;
+  const row = (await findUserById(req.user!.id))!;
   const d = parsed.data;
   if (d.newPassword) {
     if (!d.currentPassword || !(await verifyPassword(d.currentPassword, row.password_hash))) {
       res.status(400).json({ error: "Current password is incorrect." });
       return;
     }
-    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(await hashPassword(d.newPassword), row.id);
+    await q.run("UPDATE users SET password_hash = ? WHERE id = ?", [await hashPassword(d.newPassword), row.id]);
   }
   const goal = d.goal && GOALS.includes(d.goal) ? d.goal : row.goal;
   const level = d.level && LEVELS.includes(d.level) ? d.level : row.level;
-  db.prepare("UPDATE users SET name = ?, goal = ?, level = ? WHERE id = ?").run(d.name ?? row.name, goal, level, row.id);
-  res.json({ user: toPublicUser(findUserById(row.id)!) });
+  await q.run("UPDATE users SET name = ?, goal = ?, level = ? WHERE id = ?", [d.name ?? row.name, goal, level, row.id]);
+  res.json({ user: toPublicUser((await findUserById(row.id))!) });
 });
 
 authRouter.get("/options", (_req, res) => {

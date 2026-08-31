@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,7 +6,6 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 // Works both from src/ (tsx) and dist/ (compiled): ../data relative to this file.
 const dataDir = path.resolve(here, "..", "data");
-fs.mkdirSync(dataDir, { recursive: true });
 
 /** Expands a leading "~" or "$HOME" so DB_PATH can point into the hosting user's home directory. */
 function expandHome(p: string): string {
@@ -16,16 +14,124 @@ function expandHome(p: string): string {
   return p.replace(/^\$HOME(?=[\\/])/, home);
 }
 
-export const DB_PATH = process.env.DB_PATH ? expandHome(process.env.DB_PATH) : path.join(dataDir, "pydatamaster.db");
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+// On Vercel (read-only bundle) without a Turso database, fall back to /tmp so the app still runs
+// (data is ephemeral there until TURSO_DATABASE_URL is configured).
+export const DB_PATH = process.env.DB_PATH
+  ? expandHome(process.env.DB_PATH)
+  : process.env.VERCEL
+    ? "/tmp/pydatamaster.db"
+    : path.join(dataDir, "pydatamaster.db");
 
-/** Uploaded images live next to the database so they survive redeploys on hosts with a persistent data dir. */
-export const UPLOADS_DIR = process.env.UPLOADS_DIR ? expandHome(process.env.UPLOADS_DIR) : path.join(path.dirname(DB_PATH), "uploads");
-fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-export const db = new DatabaseSync(DB_PATH);
+export interface RunResult {
+  changes: number;
+  lastInsertRowid: number;
+}
 
-db.exec("PRAGMA journal_mode = WAL;");
-db.exec("PRAGMA foreign_keys = ON;");
+interface Driver {
+  all(sql: string, params: any[]): Promise<Record<string, any>[]>;
+  get(sql: string, params: any[]): Promise<Record<string, any> | undefined>;
+  run(sql: string, params: any[]): Promise<RunResult>;
+  exec(sql: string): Promise<void>;
+}
+
+// Tolerate the env-var names used by different Turso/Vercel integrations.
+const TURSO_URL = process.env.TURSO_DATABASE_URL || process.env.TURSO_URL || "";
+const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN || process.env.TURSO_TOKEN || undefined;
+
+/** True when the libSQL (Turso) driver is active instead of the local node:sqlite file. */
+export const isLibsql = !!TURSO_URL;
+
+async function createLibsqlDriver(): Promise<Driver> {
+  const { createClient } = await import("@libsql/client");
+  const client = createClient({
+    url: TURSO_URL,
+    authToken: TURSO_TOKEN,
+  });
+  // PRAGMAs are managed by the libSQL server; apply best-effort and ignore failures.
+  try {
+    await client.execute("PRAGMA foreign_keys = ON");
+  } catch {
+    // Not supported over this protocol; Turso enforces its own defaults.
+  }
+  return {
+    async all(sql, params) {
+      const result = await client.execute({ sql, args: params });
+      return result.rows as unknown as Record<string, any>[];
+    },
+    async get(sql, params) {
+      const result = await client.execute({ sql, args: params });
+      return result.rows[0] as unknown as Record<string, any> | undefined;
+    },
+    async run(sql, params) {
+      const result = await client.execute({ sql, args: params });
+      return {
+        changes: Number(result.rowsAffected) || 0,
+        lastInsertRowid: result.lastInsertRowid === undefined ? 0 : Number(result.lastInsertRowid),
+      };
+    },
+    async exec(sql) {
+      await client.executeMultiple(sql);
+    },
+  };
+}
+
+async function createNodeSqliteDriver(): Promise<Driver> {
+  const { DatabaseSync } = await import("node:sqlite");
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+  const db = new DatabaseSync(DB_PATH);
+  try {
+    db.exec("PRAGMA journal_mode = WAL;");
+    db.exec("PRAGMA foreign_keys = ON;");
+  } catch {
+    // PRAGMA support varies between builds; never fatal.
+  }
+  return {
+    all(sql, params) {
+      return Promise.resolve(db.prepare(sql).all(...(params as any[])) as Record<string, any>[]);
+    },
+    get(sql, params) {
+      return Promise.resolve(db.prepare(sql).get(...(params as any[])) as Record<string, any> | undefined);
+    },
+    run(sql, params) {
+      const result = db.prepare(sql).run(...(params as any[]));
+      return Promise.resolve({
+        changes: Number(result.changes),
+        lastInsertRowid: Number(result.lastInsertRowid),
+      });
+    },
+    exec(sql) {
+      db.exec(sql);
+      return Promise.resolve();
+    },
+  };
+}
+
+const driver: Driver = isLibsql ? await createLibsqlDriver() : await createNodeSqliteDriver();
+
+/** Async query facade over the active driver. Params are always positional `?` arrays. */
+export const q = {
+  all<T = Record<string, any>>(sql: string, params: any[] = []): Promise<T[]> {
+    return driver.all(sql, params) as Promise<T[]>;
+  },
+  get<T = Record<string, any>>(sql: string, params: any[] = []): Promise<T | undefined> {
+    return driver.get(sql, params) as Promise<T | undefined>;
+  },
+  run(sql: string, params: any[] = []): Promise<RunResult> {
+    return driver.run(sql, params);
+  },
+  exec(sql: string): Promise<void> {
+    return driver.exec(sql);
+  },
+};
+
+/** Normalizes BLOB column values (Uint8Array from node:sqlite, ArrayBuffer from libSQL) to a Node Buffer. */
+export function toBuffer(value: unknown): Buffer {
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  return Buffer.alloc(0);
+}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -222,13 +328,32 @@ CREATE TABLE IF NOT EXISTS pages (
   content TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS uploads (
+  name TEXT PRIMARY KEY,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  data BLOB NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
-export function migrate(): void {
-  db.exec(SCHEMA);
+export async function migrate(): Promise<void> {
+  await q.exec(SCHEMA);
   // Additive column migrations for databases created before the blog pivot.
-  const postCols = (db.prepare("PRAGMA table_info(posts)").all() as { name: string }[]).map((c) => c.name);
-  if (!postCols.includes("cover_image")) db.exec("ALTER TABLE posts ADD COLUMN cover_image TEXT NOT NULL DEFAULT ''");
+  let postCols: string[] = [];
+  try {
+    postCols = (await q.all<{ name: string }>("PRAGMA table_info(posts)")).map((c) => c.name);
+  } catch {
+    // PRAGMA introspection unavailable on this driver; fall through to the guarded ALTER.
+  }
+  if (!postCols.includes("cover_image")) {
+    try {
+      await q.exec("ALTER TABLE posts ADD COLUMN cover_image TEXT NOT NULL DEFAULT ''");
+    } catch {
+      // Column already exists.
+    }
+  }
 }
 
 export function nowIso(): string {
@@ -254,7 +379,7 @@ export function parseJsonArray(value: unknown): string[] {
   }
 }
 
-export function countRows(table: string, where = "", params: unknown[] = []): number {
-  const row = db.prepare(`SELECT COUNT(*) AS c FROM ${table} ${where}`).get(...(params as any[])) as { c: number };
-  return row?.c ?? 0;
+export async function countRows(table: string, where = "", params: unknown[] = []): Promise<number> {
+  const row = await q.get<{ c: number }>(`SELECT COUNT(*) AS c FROM ${table} ${where}`, params as any[]);
+  return Number(row?.c) || 0;
 }

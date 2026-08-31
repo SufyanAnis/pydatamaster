@@ -1,4 +1,4 @@
-import { db, parseJsonArray } from "./db.js";
+import { q, parseJsonArray } from "./db.js";
 import type { Category, ChartType, Lesson, Module, Page, PipelineStep, Post, QuizQuestion, Resource } from "./types.js";
 
 type Row = Record<string, any>;
@@ -47,13 +47,14 @@ export function rowToModule(r: Row, lessons: Lesson[] = []): Module {
   };
 }
 
-export function loadQuizForLessons(lessonIds: string[]): Map<string, QuizQuestion[]> {
+export async function loadQuizForLessons(lessonIds: string[]): Promise<Map<string, QuizQuestion[]>> {
   const map = new Map<string, QuizQuestion[]>();
   if (lessonIds.length === 0) return map;
   const placeholders = lessonIds.map(() => "?").join(",");
-  const rows = db
-    .prepare(`SELECT * FROM quiz_questions WHERE lesson_id IN (${placeholders}) ORDER BY lesson_id, order_index, id`)
-    .all(...lessonIds) as Row[];
+  const rows = await q.all<Row>(
+    `SELECT * FROM quiz_questions WHERE lesson_id IN (${placeholders}) ORDER BY lesson_id, order_index, id`,
+    lessonIds,
+  );
   for (const r of rows) {
     const list = map.get(r.lesson_id) ?? [];
     list.push(rowToQuiz(r));
@@ -62,13 +63,13 @@ export function loadQuizForLessons(lessonIds: string[]): Map<string, QuizQuestio
   return map;
 }
 
-export function loadModules(opts: { includeUnpublished?: boolean } = {}): Module[] {
+export async function loadModules(opts: { includeUnpublished?: boolean } = {}): Promise<Module[]> {
   const where = opts.includeUnpublished ? "" : "WHERE published = 1";
-  const modRows = db.prepare(`SELECT * FROM modules ${where} ORDER BY order_index, title`).all() as Row[];
-  const lessonRows = db
-    .prepare(`SELECT * FROM lessons ${opts.includeUnpublished ? "" : "WHERE published = 1"} ORDER BY module_id, order_index, title`)
-    .all() as Row[];
-  const quizMap = loadQuizForLessons(lessonRows.map((l) => l.id));
+  const modRows = await q.all<Row>(`SELECT * FROM modules ${where} ORDER BY order_index, title`);
+  const lessonRows = await q.all<Row>(
+    `SELECT * FROM lessons ${opts.includeUnpublished ? "" : "WHERE published = 1"} ORDER BY module_id, order_index, title`,
+  );
+  const quizMap = await loadQuizForLessons(lessonRows.map((l) => l.id));
   const byModule = new Map<string, Lesson[]>();
   for (const l of lessonRows) {
     const list = byModule.get(l.module_id) ?? [];
@@ -78,14 +79,14 @@ export function loadModules(opts: { includeUnpublished?: boolean } = {}): Module
   return modRows.map((m) => rowToModule(m, byModule.get(m.id) ?? []));
 }
 
-export function loadLesson(lessonId: string, opts: { includeUnpublished?: boolean } = {}): { module: Module; lesson: Lesson } | null {
-  const l = db.prepare("SELECT * FROM lessons WHERE id = ?").get(lessonId) as Row | undefined;
+export async function loadLesson(lessonId: string, opts: { includeUnpublished?: boolean } = {}): Promise<{ module: Module; lesson: Lesson } | null> {
+  const l = await q.get<Row>("SELECT * FROM lessons WHERE id = ?", [lessonId]);
   if (!l) return null;
   if (!opts.includeUnpublished && !l.published) return null;
-  const m = db.prepare("SELECT * FROM modules WHERE id = ?").get(l.module_id) as Row | undefined;
+  const m = await q.get<Row>("SELECT * FROM modules WHERE id = ?", [l.module_id]);
   if (!m) return null;
   if (!opts.includeUnpublished && !m.published) return null;
-  const quiz = loadQuizForLessons([l.id]).get(l.id) ?? [];
+  const quiz = (await loadQuizForLessons([l.id])).get(l.id) ?? [];
   return { module: rowToModule(m), lesson: rowToLesson(l, quiz) };
 }
 
@@ -106,7 +107,7 @@ export function rowToPost(r: Row): Post {
   };
 }
 
-export function loadPosts(opts: { includeUnpublished?: boolean; category?: string; q?: string; limit?: number } = {}): Post[] {
+export async function loadPosts(opts: { includeUnpublished?: boolean; category?: string; q?: string; limit?: number } = {}): Promise<Post[]> {
   const clauses: string[] = [];
   const params: any[] = [];
   if (!opts.includeUnpublished) clauses.push("published = 1");
@@ -121,12 +122,12 @@ export function loadPosts(opts: { includeUnpublished?: boolean; category?: strin
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = opts.limit ? `LIMIT ${Math.max(1, Math.min(200, opts.limit))}` : "";
-  const rows = db.prepare(`SELECT * FROM posts ${where} ORDER BY published_at DESC ${limit}`).all(...params) as Row[];
+  const rows = await q.all<Row>(`SELECT * FROM posts ${where} ORDER BY published_at DESC ${limit}`, params);
   return rows.map(rowToPost);
 }
 
-export function loadPost(id: string, opts: { includeUnpublished?: boolean } = {}): Post | null {
-  const r = db.prepare("SELECT * FROM posts WHERE id = ?").get(id) as Row | undefined;
+export async function loadPost(id: string, opts: { includeUnpublished?: boolean } = {}): Promise<Post | null> {
+  const r = await q.get<Row>("SELECT * FROM posts WHERE id = ?", [id]);
   if (!r) return null;
   if (!opts.includeUnpublished && !r.published) return null;
   return rowToPost(r);
@@ -152,8 +153,8 @@ export function rowToStep(r: Row): PipelineStep {
   };
 }
 
-export function loadPipeline(): PipelineStep[] {
-  const rows = db.prepare("SELECT * FROM pipeline_steps ORDER BY number").all() as Row[];
+export async function loadPipeline(): Promise<PipelineStep[]> {
+  const rows = await q.all<Row>("SELECT * FROM pipeline_steps ORDER BY number");
   return rows.map(rowToStep);
 }
 
@@ -170,8 +171,8 @@ export function rowToResource(r: Row): Resource {
   };
 }
 
-export function loadResources(): Resource[] {
-  const rows = db.prepare("SELECT * FROM resources ORDER BY order_index, id").all() as Row[];
+export async function loadResources(): Promise<Resource[]> {
+  const rows = await q.all<Row>("SELECT * FROM resources ORDER BY order_index, id");
   return rows.map(rowToResource);
 }
 
@@ -185,13 +186,13 @@ export function rowToCategory(r: Row): Category {
   };
 }
 
-export function loadCategories(): Category[] {
-  const rows = db.prepare("SELECT * FROM categories ORDER BY order_index, name").all() as Row[];
+export async function loadCategories(): Promise<Category[]> {
+  const rows = await q.all<Row>("SELECT * FROM categories ORDER BY order_index, name");
   return rows.map(rowToCategory);
 }
 
-export function loadCategory(slug: string): Category | null {
-  const r = db.prepare("SELECT * FROM categories WHERE slug = ?").get(slug) as Row | undefined;
+export async function loadCategory(slug: string): Promise<Category | null> {
+  const r = await q.get<Row>("SELECT * FROM categories WHERE slug = ?", [slug]);
   return r ? rowToCategory(r) : null;
 }
 
@@ -199,13 +200,13 @@ export function rowToPage(r: Row): Page {
   return { slug: r.slug, title: r.title, content: r.content ?? "", updatedAt: r.updated_at };
 }
 
-export function loadPages(): Page[] {
-  const rows = db.prepare("SELECT * FROM pages ORDER BY slug").all() as Row[];
+export async function loadPages(): Promise<Page[]> {
+  const rows = await q.all<Row>("SELECT * FROM pages ORDER BY slug");
   return rows.map(rowToPage);
 }
 
-export function loadPage(slug: string): Page | null {
-  const r = db.prepare("SELECT * FROM pages WHERE slug = ?").get(slug) as Row | undefined;
+export async function loadPage(slug: string): Promise<Page | null> {
+  const r = await q.get<Row>("SELECT * FROM pages WHERE slug = ?", [slug]);
   return r ? rowToPage(r) : null;
 }
 
@@ -217,22 +218,26 @@ export interface SearchHit {
   href: string;
 }
 
-export function searchAll(q: string, limit = 12): SearchHit[] {
-  const term = q.trim().toLowerCase();
+export async function searchAll(query: string, limit = 12): Promise<SearchHit[]> {
+  const term = query.trim().toLowerCase();
   if (!term) return [];
   const like = `%${term}%`;
   const hits: SearchHit[] = [];
-  const catNames = new Map(loadCategories().map((c) => [c.slug, c.name]));
+  const catNames = new Map((await loadCategories()).map((c) => [c.slug, c.name]));
 
-  const posts = db
-    .prepare(`SELECT id, title, category FROM posts WHERE published = 1 AND (lower(title) LIKE ? OR lower(excerpt) LIKE ? OR lower(content) LIKE ?) ORDER BY published_at DESC LIMIT ?`)
-    .all(like, like, like, limit) as Row[];
+  const posts = await q.all<Row>(
+    `SELECT id, title, category FROM posts WHERE published = 1 AND (lower(title) LIKE ? OR lower(excerpt) LIKE ? OR lower(content) LIKE ?) ORDER BY published_at DESC LIMIT ?`,
+    [like, like, like, limit],
+  );
   for (const p of posts) hits.push({ type: "post", id: p.id, title: p.title, subtitle: catNames.get(p.category) ?? p.category, href: `/blog/${p.id}` });
 
-  const cats = db.prepare(`SELECT slug, name, description FROM categories WHERE lower(name) LIKE ? OR lower(description) LIKE ? ORDER BY order_index LIMIT 4`).all(like, like) as Row[];
+  const cats = await q.all<Row>(
+    `SELECT slug, name, description FROM categories WHERE lower(name) LIKE ? OR lower(description) LIKE ? ORDER BY order_index LIMIT 4`,
+    [like, like],
+  );
   for (const c of cats) hits.push({ type: "category", id: c.slug, title: c.name, subtitle: "Topic", href: `/category/${c.slug}` });
 
-  const pages = db.prepare(`SELECT slug, title FROM pages WHERE lower(title) LIKE ? OR lower(content) LIKE ? ORDER BY slug LIMIT 4`).all(like, like) as Row[];
+  const pages = await q.all<Row>(`SELECT slug, title FROM pages WHERE lower(title) LIKE ? OR lower(content) LIKE ? ORDER BY slug LIMIT 4`, [like, like]);
   for (const p of pages) hits.push({ type: "page", id: p.slug, title: p.title, subtitle: "Page", href: `/p/${p.slug}` });
 
   return hits.slice(0, limit);

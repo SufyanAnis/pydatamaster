@@ -17,7 +17,7 @@ function tokens(text: string): string[] {
  * A dependable fallback tutor that answers from the curriculum when no AI provider is configured.
  * It finds the lessons most relevant to the question and returns their explanation and code.
  */
-export function offlineTutorAnswer(question: string, context?: { lessonTitle?: string; code?: string }): string {
+export async function offlineTutorAnswer(question: string, context?: { lessonTitle?: string; code?: string }): Promise<string> {
   const q = question.trim();
   const qTokens = tokens(q);
   const greeting = /^(hi|hello|hey|salam|assalam|yo|good (morning|evening|afternoon))\b/i.test(q);
@@ -25,7 +25,7 @@ export function offlineTutorAnswer(question: string, context?: { lessonTitle?: s
     return "Hi! I'm PyData Tutor. Ask me about NumPy, Pandas, Matplotlib or Scikit-Learn - for example *\"How do I drop missing values?\"* or *\"What is broadcasting?\"*";
   }
 
-  const modules = loadModules();
+  const modules = await loadModules();
   const scored: { score: number; moduleTitle: string; moduleId: string; lesson: (typeof modules)[number]["lessons"][number] }[] = [];
   for (const m of modules) {
     for (const l of m.lessons) {

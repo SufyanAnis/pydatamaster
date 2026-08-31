@@ -1,6 +1,6 @@
 // Seed data for the blog pivot: nav categories, footer pages and additional articles.
 // Also converts curriculum lessons into blog posts so every category has content.
-import { db, nowIso, countRows } from "./db.js";
+import { q, nowIso, countRows } from "./db.js";
 
 export const CATEGORIES: { slug: string; name: string; description: string; showInNav: boolean }[] = [
   { slug: "python", name: "Python", description: "Core Python language tutorials: syntax, data structures, functions and everyday idioms for data work.", showInNav: true },
@@ -405,71 +405,75 @@ export interface BlogSeedReport {
 }
 
 /** Idempotent: only inserts what does not exist yet. */
-export function seedBlog(): BlogSeedReport {
+export async function seedBlog(): Promise<BlogSeedReport> {
   const report: BlogSeedReport = { categories: 0, pages: 0, extraPosts: 0, lessonPosts: 0 };
   const now = nowIso();
 
-  if (countRows("categories") === 0) {
-    const ins = db.prepare("INSERT INTO categories (slug, name, description, order_index, show_in_nav) VALUES (?, ?, ?, ?, ?)");
-    CATEGORIES.forEach((c, i) => {
-      ins.run(c.slug, c.name, c.description, i, c.showInNav ? 1 : 0);
+  if ((await countRows("categories")) === 0) {
+    let i = 0;
+    for (const c of CATEGORIES) {
+      await q.run("INSERT INTO categories (slug, name, description, order_index, show_in_nav) VALUES (?, ?, ?, ?, ?)", [
+        c.slug,
+        c.name,
+        c.description,
+        i++,
+        c.showInNav ? 1 : 0,
+      ]);
       report.categories++;
-    });
+    }
   }
 
-  if (countRows("pages") === 0) {
-    const ins = db.prepare("INSERT INTO pages (slug, title, content, updated_at) VALUES (?, ?, ?, ?)");
+  if ((await countRows("pages")) === 0) {
     for (const p of PAGES) {
-      ins.run(p.slug, p.title, p.content, now);
+      await q.run("INSERT INTO pages (slug, title, content, updated_at) VALUES (?, ?, ?, ?)", [p.slug, p.title, p.content, now]);
       report.pages++;
     }
   }
 
   // Re-map legacy free-text post categories to category slugs.
-  const remapById = db.prepare("UPDATE posts SET category = ? WHERE id = ? AND category NOT IN (SELECT slug FROM categories)");
-  for (const [id, slug] of Object.entries(POST_REMAP)) remapById.run(slug, id);
-  const remapByName = db.prepare("UPDATE posts SET category = ? WHERE category = ?");
-  for (const [oldName, slug] of Object.entries(CATEGORY_REMAP)) remapByName.run(slug, oldName);
+  for (const [id, slug] of Object.entries(POST_REMAP)) {
+    await q.run("UPDATE posts SET category = ? WHERE id = ? AND category NOT IN (SELECT slug FROM categories)", [slug, id]);
+  }
+  for (const [oldName, slug] of Object.entries(CATEGORY_REMAP)) {
+    await q.run("UPDATE posts SET category = ? WHERE category = ?", [slug, oldName]);
+  }
 
-  const insPost = db.prepare(
-    `INSERT OR IGNORE INTO posts (id, title, excerpt, content, category, cover_image, author, read_time, published, published_at, views, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, '', 'PyData Team', ?, 1, ?, 0, ?, ?)`,
-  );
+  const INSERT_POST = `INSERT OR IGNORE INTO posts (id, title, excerpt, content, category, cover_image, author, read_time, published, published_at, views, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, '', 'PyData Team', ?, 1, ?, 0, ?, ?)`;
   for (const p of EXTRA_POSTS) {
-    const r = insPost.run(p.id, p.title, p.excerpt, p.content, p.category, p.readTime, p.publishedAt, now, now);
+    const r = await q.run(INSERT_POST, [p.id, p.title, p.excerpt, p.content, p.category, p.readTime, p.publishedAt, now, now]);
     if (Number(r.changes) > 0) report.extraPosts++;
   }
 
   // Convert curriculum lessons into blog articles under their library's category.
   const LIB_TO_CATEGORY: Record<string, string> = { NumPy: "numpy", Pandas: "pandas", Matplotlib: "matplotlib", "Scikit-Learn": "scikit-learn" };
-  const lessons = db
-    .prepare(
-      `SELECT l.id, l.title, l.summary, l.content, l.code_example, l.duration_min, m.library, m.order_index AS m_order, l.order_index AS l_order
-       FROM lessons l JOIN modules m ON m.id = l.module_id WHERE l.published = 1 ORDER BY m.order_index, l.order_index`,
-    )
-    .all() as Record<string, any>[];
+  const lessons = await q.all<Record<string, any>>(
+    `SELECT l.id, l.title, l.summary, l.content, l.code_example, l.duration_min, m.library, m.order_index AS m_order, l.order_index AS l_order
+     FROM lessons l JOIN modules m ON m.id = l.module_id WHERE l.published = 1 ORDER BY m.order_index, l.order_index`,
+  );
   const base = new Date("2026-05-01T09:00:00.000Z").getTime();
-  lessons.forEach((l, i) => {
+  let i = 0;
+  for (const l of lessons) {
     const category = LIB_TO_CATEGORY[String(l.library)] ?? "python";
     let content = String(l.content);
     if (l.code_example) content += `\n\n## Try it yourself\n\n\`\`\`python\n${l.code_example}\n\`\`\``;
     const publishedAt = new Date(base + i * 2 * 24 * 60 * 60 * 1000).toISOString();
-    const r = insPost.run(String(l.id), String(l.title), String(l.summary), content, category, `${Math.max(3, Number(l.duration_min))} min read`, publishedAt, now, now);
+    i++;
+    const r = await q.run(INSERT_POST, [String(l.id), String(l.title), String(l.summary), content, category, `${Math.max(3, Number(l.duration_min))} min read`, publishedAt, now, now]);
     if (Number(r.changes) > 0) report.lessonPosts++;
-  });
+  }
 
   // Assign branded cover images (shipped in client/public/covers) to posts that have none.
   const COVER_SETS: Record<string, number> = { python: 2, numpy: 2, pandas: 2, matplotlib: 2, seaborn: 1, "basic-libraries": 1, "scikit-learn": 1 };
-  const bare = db.prepare("SELECT id, category FROM posts WHERE cover_image = '' ORDER BY published_at").all() as Record<string, any>[];
+  const bare = await q.all<Record<string, any>>("SELECT id, category FROM posts WHERE cover_image = '' ORDER BY published_at");
   const counters = new Map<string, number>();
-  const setCover = db.prepare("UPDATE posts SET cover_image = ? WHERE id = ?");
   for (const p of bare) {
     const cat = String(p.category);
     const variants = COVER_SETS[cat] ?? 0;
     const n = counters.get(cat) ?? 0;
     counters.set(cat, n + 1);
     const cover = variants > 0 ? `/covers/${cat}-${(n % variants) + 1}.svg` : `/covers/generic-${(n % 2) + 1}.svg`;
-    setCover.run(cover, p.id);
+    await q.run("UPDATE posts SET cover_image = ? WHERE id = ?", [cover, p.id]);
   }
 
   return report;

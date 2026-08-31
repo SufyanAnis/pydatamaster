@@ -1,14 +1,14 @@
-import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { db, nowIso, slugify, countRows, UPLOADS_DIR } from "../db.js";
+import { q, nowIso, slugify, countRows } from "../db.js";
 import { findUserById, hashPassword, pickAvatarColor, requireAdmin, toPublicUser, type UserRow } from "../auth.js";
 import { loadCategories, loadModules, loadPage, loadPages, loadPipeline, loadPost, loadPosts, loadResources, rowToCategory, rowToLesson, rowToModule, loadQuizForLessons } from "../content.js";
 import { computeProgress } from "../progress-service.js";
 import { getSiteSettings, maskedTutorSettings, saveSiteSettings, saveTutorSettings, getTutorSettings } from "../settings.js";
 import { runTutor } from "./tutor.js";
+import { SAFE_UPLOAD_NAME } from "./content.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -22,11 +22,12 @@ function daysAgoIso(days: number): string {
   return d.toISOString();
 }
 
-function seriesByDay(table: string, dateCol: string, days: number, where = ""): { day: string; count: number }[] {
+async function seriesByDay(table: string, dateCol: string, days: number, where = ""): Promise<{ day: string; count: number }[]> {
   const since = daysAgoIso(days - 1);
-  const rows = db
-    .prepare(`SELECT substr(${dateCol}, 1, 10) AS day, COUNT(*) AS count FROM ${table} WHERE ${dateCol} >= ? ${where} GROUP BY day ORDER BY day`)
-    .all(since) as Row[];
+  const rows = await q.all<Row>(
+    `SELECT substr(${dateCol}, 1, 10) AS day, COUNT(*) AS count FROM ${table} WHERE ${dateCol} >= ? ${where} GROUP BY day ORDER BY day`,
+    [since],
+  );
   const map = new Map(rows.map((r) => [String(r.day), Number(r.count)]));
   const out: { day: string; count: number }[] = [];
   for (let i = days - 1; i >= 0; i--) {
@@ -37,82 +38,80 @@ function seriesByDay(table: string, dateCol: string, days: number, where = ""): 
 }
 
 // ---------------------------------------------------------------- Dashboard
-adminRouter.get("/stats", (_req, res) => {
+adminRouter.get("/stats", async (_req, res) => {
   const totals = {
-    users: countRows("users"),
-    learners: countRows("users", "WHERE role = 'learner'"),
-    admins: countRows("users", "WHERE role = 'admin'"),
-    modules: countRows("modules"),
-    lessons: countRows("lessons"),
-    posts: countRows("posts"),
-    completions: countRows("progress"),
-    quizAttempts: countRows("quiz_attempts"),
-    newMessages: countRows("messages", "WHERE status = 'new'"),
-    messages: countRows("messages"),
-    waitlist: countRows("waitlist"),
-    subscribers: countRows("subscribers", "WHERE status = 'active'"),
-    tutorChats: countRows("tutor_logs"),
-    pageViews30d: countRows("page_views", "WHERE created_at >= ?", [daysAgoIso(29)]),
-    activeUsers7d: (db.prepare("SELECT COUNT(DISTINCT user_id) AS c FROM activity WHERE created_at >= ?").get(daysAgoIso(6)) as Row).c as number,
+    users: await countRows("users"),
+    learners: await countRows("users", "WHERE role = 'learner'"),
+    admins: await countRows("users", "WHERE role = 'admin'"),
+    modules: await countRows("modules"),
+    lessons: await countRows("lessons"),
+    posts: await countRows("posts"),
+    completions: await countRows("progress"),
+    quizAttempts: await countRows("quiz_attempts"),
+    newMessages: await countRows("messages", "WHERE status = 'new'"),
+    messages: await countRows("messages"),
+    waitlist: await countRows("waitlist"),
+    subscribers: await countRows("subscribers", "WHERE status = 'active'"),
+    tutorChats: await countRows("tutor_logs"),
+    pageViews30d: await countRows("page_views", "WHERE created_at >= ?", [daysAgoIso(29)]),
+    activeUsers7d: Number((await q.get<Row>("SELECT COUNT(DISTINCT user_id) AS c FROM activity WHERE created_at >= ?", [daysAgoIso(6)]))?.c) || 0,
   };
-  const signups = seriesByDay("users", "created_at", 30);
-  const completions = seriesByDay("progress", "completed_at", 30);
-  const pageViews = seriesByDay("page_views", "created_at", 30);
-  const tutorUsage = seriesByDay("tutor_logs", "created_at", 30);
+  const signups = await seriesByDay("users", "created_at", 30);
+  const completions = await seriesByDay("progress", "completed_at", 30);
+  const pageViews = await seriesByDay("page_views", "created_at", 30);
+  const tutorUsage = await seriesByDay("tutor_logs", "created_at", 30);
 
-  const topLessons = db
-    .prepare(
-      `SELECT l.id, l.title, m.title AS module_title, COUNT(p.user_id) AS completions
-       FROM lessons l JOIN modules m ON m.id = l.module_id LEFT JOIN progress p ON p.lesson_id = l.id
-       GROUP BY l.id ORDER BY completions DESC, m.order_index, l.order_index LIMIT 6`,
-    )
-    .all() as Row[];
+  const topLessons = await q.all<Row>(
+    `SELECT l.id, l.title, m.title AS module_title, COUNT(p.user_id) AS completions
+     FROM lessons l JOIN modules m ON m.id = l.module_id LEFT JOIN progress p ON p.lesson_id = l.id
+     GROUP BY l.id ORDER BY completions DESC, m.order_index, l.order_index LIMIT 6`,
+  );
 
-  const moduleProgress = db
-    .prepare(
-      `SELECT m.id, m.title, COUNT(DISTINCT l.id) AS lessons, COUNT(p.user_id) AS completions
-       FROM modules m LEFT JOIN lessons l ON l.module_id = m.id LEFT JOIN progress p ON p.lesson_id = l.id
-       GROUP BY m.id ORDER BY m.order_index`,
-    )
-    .all() as Row[];
+  const moduleProgress = await q.all<Row>(
+    `SELECT m.id, m.title, COUNT(DISTINCT l.id) AS lessons, COUNT(p.user_id) AS completions
+     FROM modules m LEFT JOIN lessons l ON l.module_id = m.id LEFT JOIN progress p ON p.lesson_id = l.id
+     GROUP BY m.id ORDER BY m.order_index`,
+  );
 
-  const topPages = db
-    .prepare(`SELECT path, COUNT(*) AS views FROM page_views WHERE created_at >= ? GROUP BY path ORDER BY views DESC LIMIT 8`)
-    .all(daysAgoIso(29)) as Row[];
+  const topPages = await q.all<Row>(
+    `SELECT path, COUNT(*) AS views FROM page_views WHERE created_at >= ? GROUP BY path ORDER BY views DESC LIMIT 8`,
+    [daysAgoIso(29)],
+  );
 
-  const recentUsers = (db.prepare("SELECT * FROM users ORDER BY created_at DESC LIMIT 6").all() as unknown as UserRow[]).map(toPublicUser);
-  const recentMessages = db.prepare("SELECT id, first_name, last_name, email, substr(message, 1, 140) AS message, status, created_at FROM messages ORDER BY created_at DESC LIMIT 5").all() as Row[];
-  const goals = db.prepare("SELECT goal, COUNT(*) AS count FROM users WHERE role = 'learner' GROUP BY goal ORDER BY count DESC").all() as Row[];
-  const levels = db.prepare("SELECT level, COUNT(*) AS count FROM users WHERE role = 'learner' GROUP BY level ORDER BY count DESC").all() as Row[];
+  const recentUsers = ((await q.all<Row>("SELECT * FROM users ORDER BY created_at DESC LIMIT 6")) as unknown as UserRow[]).map(toPublicUser);
+  const recentMessages = await q.all<Row>(
+    "SELECT id, first_name, last_name, email, substr(message, 1, 140) AS message, status, created_at FROM messages ORDER BY created_at DESC LIMIT 5",
+  );
+  const goals = await q.all<Row>("SELECT goal, COUNT(*) AS count FROM users WHERE role = 'learner' GROUP BY goal ORDER BY count DESC");
+  const levels = await q.all<Row>("SELECT level, COUNT(*) AS count FROM users WHERE role = 'learner' GROUP BY level ORDER BY count DESC");
 
   res.json({ totals, signups, completions, pageViews, tutorUsage, topLessons, moduleProgress, topPages, recentUsers, recentMessages, goals, levels });
 });
 
 // ---------------------------------------------------------------- Users
-adminRouter.get("/users", (req, res) => {
-  const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+adminRouter.get("/users", async (req, res) => {
+  const query = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
   const role = typeof req.query.role === "string" ? req.query.role : "";
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = 20;
   const clauses: string[] = [];
   const params: any[] = [];
-  if (q) {
+  if (query) {
     clauses.push("(lower(name) LIKE ? OR lower(email) LIKE ?)");
-    params.push(`%${q}%`, `%${q}%`);
+    params.push(`%${query}%`, `%${query}%`);
   }
   if (role === "admin" || role === "learner") {
     clauses.push("role = ?");
     params.push(role);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const total = countRows("users", where, params);
-  const rows = db
-    .prepare(
-      `SELECT u.*, (SELECT COUNT(*) FROM progress p WHERE p.user_id = u.id) AS lessons_done,
-              (SELECT COALESCE(SUM(xp),0) FROM activity a WHERE a.user_id = u.id) AS xp
-       FROM users u ${where} ORDER BY u.created_at DESC LIMIT ? OFFSET ?`,
-    )
-    .all(...params, pageSize, (page - 1) * pageSize) as unknown as (UserRow & { lessons_done: number; xp: number })[];
+  const total = await countRows("users", where, params);
+  const rows = (await q.all<Row>(
+    `SELECT u.*, (SELECT COUNT(*) FROM progress p WHERE p.user_id = u.id) AS lessons_done,
+            (SELECT COALESCE(SUM(xp),0) FROM activity a WHERE a.user_id = u.id) AS xp
+     FROM users u ${where} ORDER BY u.created_at DESC LIMIT ? OFFSET ?`,
+    [...params, pageSize, (page - 1) * pageSize],
+  )) as unknown as (UserRow & { lessons_done: number; xp: number })[];
   res.json({
     users: rows.map((r) => ({ ...toPublicUser(r), lessonsDone: Number(r.lessons_done), xp: Number(r.xp) })),
     total,
@@ -121,13 +120,13 @@ adminRouter.get("/users", (req, res) => {
   });
 });
 
-adminRouter.get("/users/:id", (req, res) => {
-  const row = findUserById(Number(req.params.id));
+adminRouter.get("/users/:id", async (req, res) => {
+  const row = await findUserById(Number(req.params.id));
   if (!row) {
     res.status(404).json({ error: "User not found" });
     return;
   }
-  res.json({ user: toPublicUser(row), progress: computeProgress(row.id) });
+  res.json({ user: toPublicUser(row), progress: await computeProgress(row.id) });
 });
 
 const createUserSchema = z.object({
@@ -144,17 +143,16 @@ adminRouter.post("/users", async (req, res) => {
     return;
   }
   const d = parsed.data;
-  if (db.prepare("SELECT 1 FROM users WHERE lower(email) = lower(?)").get(d.email)) {
+  if (await q.get("SELECT 1 FROM users WHERE lower(email) = lower(?)", [d.email])) {
     res.status(409).json({ error: "Email already in use." });
     return;
   }
   const now = nowIso();
-  const result = db
-    .prepare(
-      `INSERT INTO users (name, email, password_hash, role, goal, level, status, avatar_color, created_at) VALUES (?, ?, ?, ?, 'Data Analyst', 'Beginner', 'active', ?, ?)`,
-    )
-    .run(d.name, d.email.toLowerCase(), await hashPassword(d.password), d.role, pickAvatarColor(d.email), now);
-  res.status(201).json({ user: toPublicUser(findUserById(Number(result.lastInsertRowid))!) });
+  const result = await q.run(
+    `INSERT INTO users (name, email, password_hash, role, goal, level, status, avatar_color, created_at) VALUES (?, ?, ?, ?, 'Data Analyst', 'Beginner', 'active', ?, ?)`,
+    [d.name, d.email.toLowerCase(), await hashPassword(d.password), d.role, pickAvatarColor(d.email), now],
+  );
+  res.status(201).json({ user: toPublicUser((await findUserById(Number(result.lastInsertRowid)))!) });
 });
 
 const patchUserSchema = z.object({
@@ -168,7 +166,7 @@ const patchUserSchema = z.object({
 
 adminRouter.patch("/users/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const row = findUserById(id);
+  const row = await findUserById(id);
   if (!row) {
     res.status(404).json({ error: "User not found" });
     return;
@@ -184,25 +182,25 @@ adminRouter.patch("/users/:id", async (req, res) => {
     res.status(400).json({ error: "You cannot demote or suspend your own account." });
     return;
   }
-  if (row.role === "admin" && d.role === "learner" && countRows("users", "WHERE role = 'admin'") <= 1) {
+  if (row.role === "admin" && d.role === "learner" && (await countRows("users", "WHERE role = 'admin'")) <= 1) {
     res.status(400).json({ error: "At least one admin must remain." });
     return;
   }
-  db.prepare("UPDATE users SET name = ?, role = ?, status = ?, goal = ?, level = ? WHERE id = ?").run(
+  await q.run("UPDATE users SET name = ?, role = ?, status = ?, goal = ?, level = ? WHERE id = ?", [
     d.name ?? row.name,
     d.role ?? row.role,
     d.status ?? row.status,
     d.goal ?? row.goal,
     d.level ?? row.level,
     id,
-  );
-  if (d.newPassword) db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(await hashPassword(d.newPassword), id);
-  res.json({ user: toPublicUser(findUserById(id)!) });
+  ]);
+  if (d.newPassword) await q.run("UPDATE users SET password_hash = ? WHERE id = ?", [await hashPassword(d.newPassword), id]);
+  res.json({ user: toPublicUser((await findUserById(id))!) });
 });
 
-adminRouter.delete("/users/:id", (req, res) => {
+adminRouter.delete("/users/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const row = findUserById(id);
+  const row = await findUserById(id);
   if (!row) {
     res.status(404).json({ error: "User not found" });
     return;
@@ -211,17 +209,17 @@ adminRouter.delete("/users/:id", (req, res) => {
     res.status(400).json({ error: "You cannot delete your own account." });
     return;
   }
-  if (row.role === "admin" && countRows("users", "WHERE role = 'admin'") <= 1) {
+  if (row.role === "admin" && (await countRows("users", "WHERE role = 'admin'")) <= 1) {
     res.status(400).json({ error: "At least one admin must remain." });
     return;
   }
-  db.prepare("DELETE FROM users WHERE id = ?").run(id);
+  await q.run("DELETE FROM users WHERE id = ?", [id]);
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- Curriculum
-adminRouter.get("/modules", (_req, res) => {
-  res.json({ modules: loadModules({ includeUnpublished: true }) });
+adminRouter.get("/modules", async (_req, res) => {
+  res.json({ modules: await loadModules({ includeUnpublished: true }) });
 });
 
 const moduleSchema = z.object({
@@ -235,7 +233,7 @@ const moduleSchema = z.object({
   published: z.boolean().default(true),
 });
 
-adminRouter.post("/modules", (req, res) => {
+adminRouter.post("/modules", async (req, res) => {
   const parsed = moduleSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "A module needs at least a title." });
@@ -244,18 +242,19 @@ adminRouter.post("/modules", (req, res) => {
   const d = parsed.data;
   let id = slugify(d.id || d.title);
   let n = 1;
-  while (db.prepare("SELECT 1 FROM modules WHERE id = ?").get(id)) id = `${slugify(d.id || d.title)}-${++n}`;
-  const order = (db.prepare("SELECT COALESCE(MAX(order_index), -1) + 1 AS o FROM modules").get() as Row).o as number;
+  while (await q.get("SELECT 1 FROM modules WHERE id = ?", [id])) id = `${slugify(d.id || d.title)}-${++n}`;
+  const order = Number((await q.get<Row>("SELECT COALESCE(MAX(order_index), -1) + 1 AS o FROM modules"))?.o) || 0;
   const now = nowIso();
-  db.prepare(
+  await q.run(
     `INSERT INTO modules (id, title, description, library, icon, color, level, order_index, published, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, d.title, d.description, d.library, d.icon, d.color, d.level, order, d.published ? 1 : 0, now, now);
-  res.status(201).json({ module: rowToModule(db.prepare("SELECT * FROM modules WHERE id = ?").get(id) as Row) });
+    [id, d.title, d.description, d.library, d.icon, d.color, d.level, order, d.published ? 1 : 0, now, now],
+  );
+  res.status(201).json({ module: rowToModule((await q.get<Row>("SELECT * FROM modules WHERE id = ?", [id]))!) });
 });
 
-adminRouter.put("/modules/:id", (req, res) => {
+adminRouter.put("/modules/:id", async (req, res) => {
   const id = String(req.params.id);
-  if (!db.prepare("SELECT 1 FROM modules WHERE id = ?").get(id)) {
+  if (!(await q.get("SELECT 1 FROM modules WHERE id = ?", [id]))) {
     res.status(404).json({ error: "Module not found" });
     return;
   }
@@ -265,7 +264,7 @@ adminRouter.put("/modules/:id", (req, res) => {
     return;
   }
   const d = parsed.data;
-  db.prepare(`UPDATE modules SET title = ?, description = ?, library = ?, icon = ?, color = ?, level = ?, published = ?, updated_at = ? WHERE id = ?`).run(
+  await q.run(`UPDATE modules SET title = ?, description = ?, library = ?, icon = ?, color = ?, level = ?, published = ?, updated_at = ? WHERE id = ?`, [
     d.title,
     d.description,
     d.library,
@@ -275,24 +274,26 @@ adminRouter.put("/modules/:id", (req, res) => {
     d.published ? 1 : 0,
     nowIso(),
     id,
-  );
-  const lessons = (db.prepare("SELECT * FROM lessons WHERE module_id = ? ORDER BY order_index").all(id) as Row[]).map((l) => rowToLesson(l, []));
-  res.json({ module: rowToModule(db.prepare("SELECT * FROM modules WHERE id = ?").get(id) as Row, lessons) });
+  ]);
+  const lessons = (await q.all<Row>("SELECT * FROM lessons WHERE module_id = ? ORDER BY order_index", [id])).map((l) => rowToLesson(l, []));
+  res.json({ module: rowToModule((await q.get<Row>("SELECT * FROM modules WHERE id = ?", [id]))!, lessons) });
 });
 
-adminRouter.delete("/modules/:id", (req, res) => {
-  db.prepare("DELETE FROM modules WHERE id = ?").run(String(req.params.id));
+adminRouter.delete("/modules/:id", async (req, res) => {
+  await q.run("DELETE FROM modules WHERE id = ?", [String(req.params.id)]);
   res.json({ ok: true });
 });
 
-adminRouter.post("/modules/reorder", (req, res) => {
+adminRouter.post("/modules/reorder", async (req, res) => {
   const parsed = z.object({ ids: z.array(z.string()).min(1) }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "ids required" });
     return;
   }
-  const stmt = db.prepare("UPDATE modules SET order_index = ? WHERE id = ?");
-  parsed.data.ids.forEach((id, i) => stmt.run(i, id));
+  let i = 0;
+  for (const id of parsed.data.ids) {
+    await q.run("UPDATE modules SET order_index = ? WHERE id = ?", [i++, id]);
+  }
   res.json({ ok: true });
 });
 
@@ -317,44 +318,54 @@ const lessonSchema = z.object({
   quiz: z.array(quizSchema).max(20).default([]),
 });
 
-function replaceQuiz(lessonId: string, quiz: z.infer<typeof quizSchema>[]) {
-  db.prepare("DELETE FROM quiz_questions WHERE lesson_id = ?").run(lessonId);
-  const ins = db.prepare("INSERT INTO quiz_questions (lesson_id, question, options, correct_index, explanation, order_index) VALUES (?, ?, ?, ?, ?, ?)");
-  quiz.forEach((q, i) => ins.run(lessonId, q.question, JSON.stringify(q.options), Math.min(q.correctAnswer, q.options.length - 1), q.explanation, i));
+async function replaceQuiz(lessonId: string, quiz: z.infer<typeof quizSchema>[]): Promise<void> {
+  await q.run("DELETE FROM quiz_questions WHERE lesson_id = ?", [lessonId]);
+  let i = 0;
+  for (const item of quiz) {
+    await q.run("INSERT INTO quiz_questions (lesson_id, question, options, correct_index, explanation, order_index) VALUES (?, ?, ?, ?, ?, ?)", [
+      lessonId,
+      item.question,
+      JSON.stringify(item.options),
+      Math.min(item.correctAnswer, item.options.length - 1),
+      item.explanation,
+      i++,
+    ]);
+  }
 }
 
-function lessonWithQuiz(id: string) {
-  const row = db.prepare("SELECT * FROM lessons WHERE id = ?").get(id) as Row;
-  return rowToLesson(row, loadQuizForLessons([id]).get(id) ?? []);
+async function lessonWithQuiz(id: string) {
+  const row = (await q.get<Row>("SELECT * FROM lessons WHERE id = ?", [id]))!;
+  return rowToLesson(row, (await loadQuizForLessons([id])).get(id) ?? []);
 }
 
-adminRouter.post("/lessons", (req, res) => {
+adminRouter.post("/lessons", async (req, res) => {
   const parsed = lessonSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "A lesson needs a module and a title.", details: parsed.error.flatten() });
     return;
   }
   const d = parsed.data;
-  if (!db.prepare("SELECT 1 FROM modules WHERE id = ?").get(d.moduleId)) {
+  if (!(await q.get("SELECT 1 FROM modules WHERE id = ?", [d.moduleId]))) {
     res.status(400).json({ error: "Module does not exist" });
     return;
   }
   let id = slugify(d.id || d.title);
   let n = 1;
-  while (db.prepare("SELECT 1 FROM lessons WHERE id = ?").get(id)) id = `${slugify(d.id || d.title)}-${++n}`;
-  const order = (db.prepare("SELECT COALESCE(MAX(order_index), -1) + 1 AS o FROM lessons WHERE module_id = ?").get(d.moduleId) as Row).o as number;
+  while (await q.get("SELECT 1 FROM lessons WHERE id = ?", [id])) id = `${slugify(d.id || d.title)}-${++n}`;
+  const order = Number((await q.get<Row>("SELECT COALESCE(MAX(order_index), -1) + 1 AS o FROM lessons WHERE module_id = ?", [d.moduleId]))?.o) || 0;
   const now = nowIso();
-  db.prepare(
+  await q.run(
     `INSERT INTO lessons (id, module_id, title, summary, content, code_example, chart_type, xp, duration_min, order_index, published, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, d.moduleId, d.title, d.summary, d.content, d.codeExample, d.chartType, d.xp, d.durationMin, order, d.published ? 1 : 0, now, now);
-  replaceQuiz(id, d.quiz);
-  res.status(201).json({ lesson: lessonWithQuiz(id) });
+    [id, d.moduleId, d.title, d.summary, d.content, d.codeExample, d.chartType, d.xp, d.durationMin, order, d.published ? 1 : 0, now, now],
+  );
+  await replaceQuiz(id, d.quiz);
+  res.status(201).json({ lesson: await lessonWithQuiz(id) });
 });
 
-adminRouter.put("/lessons/:id", (req, res) => {
+adminRouter.put("/lessons/:id", async (req, res) => {
   const id = String(req.params.id);
-  if (!db.prepare("SELECT 1 FROM lessons WHERE id = ?").get(id)) {
+  if (!(await q.get("SELECT 1 FROM lessons WHERE id = ?", [id]))) {
     res.status(404).json({ error: "Lesson not found" });
     return;
   }
@@ -364,32 +375,35 @@ adminRouter.put("/lessons/:id", (req, res) => {
     return;
   }
   const d = parsed.data;
-  db.prepare(
+  await q.run(
     `UPDATE lessons SET module_id = ?, title = ?, summary = ?, content = ?, code_example = ?, chart_type = ?, xp = ?, duration_min = ?, published = ?, updated_at = ? WHERE id = ?`,
-  ).run(d.moduleId, d.title, d.summary, d.content, d.codeExample, d.chartType, d.xp, d.durationMin, d.published ? 1 : 0, nowIso(), id);
-  replaceQuiz(id, d.quiz);
-  res.json({ lesson: lessonWithQuiz(id) });
+    [d.moduleId, d.title, d.summary, d.content, d.codeExample, d.chartType, d.xp, d.durationMin, d.published ? 1 : 0, nowIso(), id],
+  );
+  await replaceQuiz(id, d.quiz);
+  res.json({ lesson: await lessonWithQuiz(id) });
 });
 
-adminRouter.delete("/lessons/:id", (req, res) => {
-  db.prepare("DELETE FROM lessons WHERE id = ?").run(String(req.params.id));
+adminRouter.delete("/lessons/:id", async (req, res) => {
+  await q.run("DELETE FROM lessons WHERE id = ?", [String(req.params.id)]);
   res.json({ ok: true });
 });
 
-adminRouter.post("/lessons/reorder", (req, res) => {
+adminRouter.post("/lessons/reorder", async (req, res) => {
   const parsed = z.object({ moduleId: z.string(), ids: z.array(z.string()).min(1) }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "moduleId and ids required" });
     return;
   }
-  const stmt = db.prepare("UPDATE lessons SET order_index = ? WHERE id = ? AND module_id = ?");
-  parsed.data.ids.forEach((id, i) => stmt.run(i, id, parsed.data.moduleId));
+  let i = 0;
+  for (const id of parsed.data.ids) {
+    await q.run("UPDATE lessons SET order_index = ? WHERE id = ? AND module_id = ?", [i++, id, parsed.data.moduleId]);
+  }
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- Blog
-adminRouter.get("/posts", (_req, res) => {
-  res.json({ posts: loadPosts({ includeUnpublished: true }) });
+adminRouter.get("/posts", async (_req, res) => {
+  res.json({ posts: await loadPosts({ includeUnpublished: true }) });
 });
 
 const postSchema = z.object({
@@ -405,7 +419,7 @@ const postSchema = z.object({
   publishedAt: z.string().optional(),
 });
 
-adminRouter.post("/posts", (req, res) => {
+adminRouter.post("/posts", async (req, res) => {
   const parsed = postSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "A post needs a title." });
@@ -414,17 +428,18 @@ adminRouter.post("/posts", (req, res) => {
   const d = parsed.data;
   let id = slugify(d.id || d.title);
   let n = 1;
-  while (db.prepare("SELECT 1 FROM posts WHERE id = ?").get(id)) id = `${slugify(d.id || d.title)}-${++n}`;
+  while (await q.get("SELECT 1 FROM posts WHERE id = ?", [id])) id = `${slugify(d.id || d.title)}-${++n}`;
   const now = nowIso();
-  db.prepare(
+  await q.run(
     `INSERT INTO posts (id, title, excerpt, content, category, cover_image, author, read_time, published, published_at, views, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-  ).run(id, d.title, d.excerpt, d.content, d.category, d.coverImage, d.author, d.readTime, d.published ? 1 : 0, d.publishedAt || now, now, now);
-  res.status(201).json({ post: loadPost(id, { includeUnpublished: true }) });
+    [id, d.title, d.excerpt, d.content, d.category, d.coverImage, d.author, d.readTime, d.published ? 1 : 0, d.publishedAt || now, now, now],
+  );
+  res.status(201).json({ post: await loadPost(id, { includeUnpublished: true }) });
 });
 
-adminRouter.put("/posts/:id", (req, res) => {
+adminRouter.put("/posts/:id", async (req, res) => {
   const id = String(req.params.id);
-  const existing = loadPost(id, { includeUnpublished: true });
+  const existing = await loadPost(id, { includeUnpublished: true });
   if (!existing) {
     res.status(404).json({ error: "Post not found" });
     return;
@@ -435,22 +450,23 @@ adminRouter.put("/posts/:id", (req, res) => {
     return;
   }
   const d = parsed.data;
-  db.prepare(
+  await q.run(
     `UPDATE posts SET title = ?, excerpt = ?, content = ?, category = ?, cover_image = ?, author = ?, read_time = ?, published = ?, published_at = ?, updated_at = ? WHERE id = ?`,
-  ).run(d.title, d.excerpt, d.content, d.category, d.coverImage, d.author, d.readTime, d.published ? 1 : 0, d.publishedAt || existing.publishedAt, nowIso(), id);
-  res.json({ post: loadPost(id, { includeUnpublished: true }) });
+    [d.title, d.excerpt, d.content, d.category, d.coverImage, d.author, d.readTime, d.published ? 1 : 0, d.publishedAt || existing.publishedAt, nowIso(), id],
+  );
+  res.json({ post: await loadPost(id, { includeUnpublished: true }) });
 });
 
-adminRouter.delete("/posts/:id", (req, res) => {
-  db.prepare("DELETE FROM posts WHERE id = ?").run(String(req.params.id));
+adminRouter.delete("/posts/:id", async (req, res) => {
+  await q.run("DELETE FROM posts WHERE id = ?", [String(req.params.id)]);
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- Categories (blog nav tabs)
-adminRouter.get("/categories", (_req, res) => {
-  const counts = db.prepare("SELECT category, COUNT(*) AS n FROM posts GROUP BY category").all() as Row[];
+adminRouter.get("/categories", async (_req, res) => {
+  const counts = await q.all<Row>("SELECT category, COUNT(*) AS n FROM posts GROUP BY category");
   const countMap = new Map(counts.map((c) => [String(c.category), Number(c.n)]));
-  res.json({ categories: loadCategories().map((c) => ({ ...c, postCount: countMap.get(c.slug) ?? 0 })) });
+  res.json({ categories: (await loadCategories()).map((c) => ({ ...c, postCount: countMap.get(c.slug) ?? 0 })) });
 });
 
 const categorySchema = z.object({
@@ -460,7 +476,7 @@ const categorySchema = z.object({
   showInNav: z.boolean().default(true),
 });
 
-adminRouter.post("/categories", (req, res) => {
+adminRouter.post("/categories", async (req, res) => {
   const parsed = categorySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "A category needs a name." });
@@ -469,15 +485,21 @@ adminRouter.post("/categories", (req, res) => {
   const d = parsed.data;
   let slug = slugify(d.slug || d.name);
   let n = 1;
-  while (db.prepare("SELECT 1 FROM categories WHERE slug = ?").get(slug)) slug = `${slugify(d.slug || d.name)}-${++n}`;
-  const order = (db.prepare("SELECT COALESCE(MAX(order_index), -1) + 1 AS o FROM categories").get() as Row).o as number;
-  db.prepare("INSERT INTO categories (slug, name, description, order_index, show_in_nav) VALUES (?, ?, ?, ?, ?)").run(slug, d.name, d.description, order, d.showInNav ? 1 : 0);
-  res.status(201).json({ category: rowToCategory(db.prepare("SELECT * FROM categories WHERE slug = ?").get(slug) as Row) });
+  while (await q.get("SELECT 1 FROM categories WHERE slug = ?", [slug])) slug = `${slugify(d.slug || d.name)}-${++n}`;
+  const order = Number((await q.get<Row>("SELECT COALESCE(MAX(order_index), -1) + 1 AS o FROM categories"))?.o) || 0;
+  await q.run("INSERT INTO categories (slug, name, description, order_index, show_in_nav) VALUES (?, ?, ?, ?, ?)", [
+    slug,
+    d.name,
+    d.description,
+    order,
+    d.showInNav ? 1 : 0,
+  ]);
+  res.status(201).json({ category: rowToCategory((await q.get<Row>("SELECT * FROM categories WHERE slug = ?", [slug]))!) });
 });
 
-adminRouter.put("/categories/:slug", (req, res) => {
+adminRouter.put("/categories/:slug", async (req, res) => {
   const slug = String(req.params.slug);
-  if (!db.prepare("SELECT 1 FROM categories WHERE slug = ?").get(slug)) {
+  if (!(await q.get("SELECT 1 FROM categories WHERE slug = ?", [slug]))) {
     res.status(404).json({ error: "Category not found" });
     return;
   }
@@ -487,35 +509,37 @@ adminRouter.put("/categories/:slug", (req, res) => {
     return;
   }
   const d = parsed.data;
-  db.prepare("UPDATE categories SET name = ?, description = ?, show_in_nav = ? WHERE slug = ?").run(d.name, d.description, d.showInNav ? 1 : 0, slug);
-  res.json({ category: rowToCategory(db.prepare("SELECT * FROM categories WHERE slug = ?").get(slug) as Row) });
+  await q.run("UPDATE categories SET name = ?, description = ?, show_in_nav = ? WHERE slug = ?", [d.name, d.description, d.showInNav ? 1 : 0, slug]);
+  res.json({ category: rowToCategory((await q.get<Row>("SELECT * FROM categories WHERE slug = ?", [slug]))!) });
 });
 
-adminRouter.delete("/categories/:slug", (req, res) => {
+adminRouter.delete("/categories/:slug", async (req, res) => {
   const slug = String(req.params.slug);
-  const inUse = countRows("posts", "WHERE category = ?", [slug]);
+  const inUse = await countRows("posts", "WHERE category = ?", [slug]);
   if (inUse > 0) {
     res.status(400).json({ error: `This category still has ${inUse} post(s). Move them to another category first.` });
     return;
   }
-  db.prepare("DELETE FROM categories WHERE slug = ?").run(slug);
+  await q.run("DELETE FROM categories WHERE slug = ?", [slug]);
   res.json({ ok: true });
 });
 
-adminRouter.post("/categories/reorder", (req, res) => {
+adminRouter.post("/categories/reorder", async (req, res) => {
   const parsed = z.object({ slugs: z.array(z.string()).min(1) }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "slugs required" });
     return;
   }
-  const stmt = db.prepare("UPDATE categories SET order_index = ? WHERE slug = ?");
-  parsed.data.slugs.forEach((slug, i) => stmt.run(i, slug));
+  let i = 0;
+  for (const slug of parsed.data.slugs) {
+    await q.run("UPDATE categories SET order_index = ? WHERE slug = ?", [i++, slug]);
+  }
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- Pages (footer/legal content)
-adminRouter.get("/pages", (_req, res) => {
-  res.json({ pages: loadPages() });
+adminRouter.get("/pages", async (_req, res) => {
+  res.json({ pages: await loadPages() });
 });
 
 const pageSchema = z.object({
@@ -524,7 +548,7 @@ const pageSchema = z.object({
   content: z.string().max(100000).default(""),
 });
 
-adminRouter.post("/pages", (req, res) => {
+adminRouter.post("/pages", async (req, res) => {
   const parsed = pageSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "A page needs a title." });
@@ -533,14 +557,14 @@ adminRouter.post("/pages", (req, res) => {
   const d = parsed.data;
   let slug = slugify(d.slug || d.title);
   let n = 1;
-  while (db.prepare("SELECT 1 FROM pages WHERE slug = ?").get(slug)) slug = `${slugify(d.slug || d.title)}-${++n}`;
-  db.prepare("INSERT INTO pages (slug, title, content, updated_at) VALUES (?, ?, ?, ?)").run(slug, d.title, d.content, nowIso());
-  res.status(201).json({ page: loadPage(slug) });
+  while (await q.get("SELECT 1 FROM pages WHERE slug = ?", [slug])) slug = `${slugify(d.slug || d.title)}-${++n}`;
+  await q.run("INSERT INTO pages (slug, title, content, updated_at) VALUES (?, ?, ?, ?)", [slug, d.title, d.content, nowIso()]);
+  res.status(201).json({ page: await loadPage(slug) });
 });
 
-adminRouter.put("/pages/:slug", (req, res) => {
+adminRouter.put("/pages/:slug", async (req, res) => {
   const slug = String(req.params.slug);
-  if (!loadPage(slug)) {
+  if (!(await loadPage(slug))) {
     res.status(404).json({ error: "Page not found" });
     return;
   }
@@ -549,33 +573,34 @@ adminRouter.put("/pages/:slug", (req, res) => {
     res.status(400).json({ error: "Invalid page data" });
     return;
   }
-  db.prepare("UPDATE pages SET title = ?, content = ?, updated_at = ? WHERE slug = ?").run(parsed.data.title, parsed.data.content, nowIso(), slug);
-  res.json({ page: loadPage(slug) });
+  await q.run("UPDATE pages SET title = ?, content = ?, updated_at = ? WHERE slug = ?", [parsed.data.title, parsed.data.content, nowIso(), slug]);
+  res.json({ page: await loadPage(slug) });
 });
 
-adminRouter.delete("/pages/:slug", (req, res) => {
-  db.prepare("DELETE FROM pages WHERE slug = ?").run(String(req.params.slug));
+adminRouter.delete("/pages/:slug", async (req, res) => {
+  await q.run("DELETE FROM pages WHERE slug = ?", [String(req.params.slug)]);
   res.json({ ok: true });
 });
 
-// ---------------------------------------------------------------- Image uploads
+// ---------------------------------------------------------------- Image uploads (stored in the database)
 const ALLOWED_IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
-const SAFE_NAME = /^[a-z0-9][a-z0-9._-]{0,120}\.(png|jpg|jpeg|gif|webp)$/;
+const MIME_BY_EXT: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
-adminRouter.get("/uploads", (_req, res) => {
-  const files = fs
-    .readdirSync(UPLOADS_DIR)
-    .filter((f) => SAFE_NAME.test(f))
-    .map((f) => {
-      const st = fs.statSync(path.join(UPLOADS_DIR, f));
-      return { name: f, url: `/uploads/${f}`, size: st.size, modifiedAt: st.mtime.toISOString() };
-    })
-    .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
-  res.json({ files });
+adminRouter.get("/uploads", async (_req, res) => {
+  const rows = await q.all<Row>("SELECT name, mime, size, created_at FROM uploads ORDER BY created_at DESC");
+  res.json({
+    files: rows.map((r) => ({ name: String(r.name), url: `/uploads/${r.name}`, size: Number(r.size), modifiedAt: String(r.created_at) })),
+  });
 });
 
-adminRouter.post("/uploads", (req, res) => {
+adminRouter.post("/uploads", async (req, res) => {
   const parsed = z.object({ filename: z.string().trim().min(1).max(200), dataBase64: z.string().min(8) }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "filename and dataBase64 are required" });
@@ -600,24 +625,23 @@ adminRouter.post("/uploads", (req, res) => {
   }
   const base = slugify(path.basename(parsed.data.filename, ext)).slice(0, 40) || "image";
   const name = `${base}-${Date.now().toString(36)}${crypto.randomBytes(3).toString("hex")}${ext}`;
-  fs.writeFileSync(path.join(UPLOADS_DIR, name), buf);
+  await q.run("INSERT INTO uploads (name, mime, size, data, created_at) VALUES (?, ?, ?, ?, ?)", [name, MIME_BY_EXT[ext], buf.length, buf, nowIso()]);
   res.status(201).json({ name, url: `/uploads/${name}`, size: buf.length });
 });
 
-adminRouter.delete("/uploads/:name", (req, res) => {
+adminRouter.delete("/uploads/:name", async (req, res) => {
   const name = String(req.params.name);
-  if (!SAFE_NAME.test(name)) {
+  if (!SAFE_UPLOAD_NAME.test(name)) {
     res.status(400).json({ error: "Invalid file name" });
     return;
   }
-  const full = path.join(UPLOADS_DIR, name);
-  if (fs.existsSync(full)) fs.unlinkSync(full);
+  await q.run("DELETE FROM uploads WHERE name = ?", [name]);
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- Pipeline
-adminRouter.get("/pipeline", (_req, res) => {
-  res.json({ steps: loadPipeline() });
+adminRouter.get("/pipeline", async (_req, res) => {
+  res.json({ steps: await loadPipeline() });
 });
 
 const stepSchema = z.object({
@@ -637,7 +661,7 @@ const stepSchema = z.object({
   icon: z.string().max(40).default("Cpu"),
 });
 
-adminRouter.post("/pipeline", (req, res) => {
+adminRouter.post("/pipeline", async (req, res) => {
   const parsed = stepSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Step needs a number and title" });
@@ -646,16 +670,17 @@ adminRouter.post("/pipeline", (req, res) => {
   const d = parsed.data;
   let id = slugify(d.id || `${d.title}-${d.subtitle}`);
   let n = 1;
-  while (db.prepare("SELECT 1 FROM pipeline_steps WHERE id = ?").get(id)) id = `${slugify(d.id || d.title)}-${++n}`;
-  db.prepare(
+  while (await q.get("SELECT 1 FROM pipeline_steps WHERE id = ?", [id])) id = `${slugify(d.id || d.title)}-${++n}`;
+  await q.run(
     `INSERT INTO pipeline_steps (id, number, title, subtitle, purpose, key_concepts, core_label, core_items, scope, outcome, phase, group_name, color, icon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, d.number, d.title, d.subtitle, d.purpose, JSON.stringify(d.keyConcepts), d.coreLabel, JSON.stringify(d.coreItems), d.scope, d.outcome, d.phase, d.group, d.color, d.icon);
-  res.status(201).json({ step: loadPipeline().find((s) => s.id === id) });
+    [id, d.number, d.title, d.subtitle, d.purpose, JSON.stringify(d.keyConcepts), d.coreLabel, JSON.stringify(d.coreItems), d.scope, d.outcome, d.phase, d.group, d.color, d.icon],
+  );
+  res.status(201).json({ step: (await loadPipeline()).find((s) => s.id === id) });
 });
 
-adminRouter.put("/pipeline/:id", (req, res) => {
+adminRouter.put("/pipeline/:id", async (req, res) => {
   const id = String(req.params.id);
-  if (!db.prepare("SELECT 1 FROM pipeline_steps WHERE id = ?").get(id)) {
+  if (!(await q.get("SELECT 1 FROM pipeline_steps WHERE id = ?", [id]))) {
     res.status(404).json({ error: "Step not found" });
     return;
   }
@@ -665,20 +690,21 @@ adminRouter.put("/pipeline/:id", (req, res) => {
     return;
   }
   const d = parsed.data;
-  db.prepare(
+  await q.run(
     `UPDATE pipeline_steps SET number = ?, title = ?, subtitle = ?, purpose = ?, key_concepts = ?, core_label = ?, core_items = ?, scope = ?, outcome = ?, phase = ?, group_name = ?, color = ?, icon = ? WHERE id = ?`,
-  ).run(d.number, d.title, d.subtitle, d.purpose, JSON.stringify(d.keyConcepts), d.coreLabel, JSON.stringify(d.coreItems), d.scope, d.outcome, d.phase, d.group, d.color, d.icon, id);
-  res.json({ step: loadPipeline().find((s) => s.id === id) });
+    [d.number, d.title, d.subtitle, d.purpose, JSON.stringify(d.keyConcepts), d.coreLabel, JSON.stringify(d.coreItems), d.scope, d.outcome, d.phase, d.group, d.color, d.icon, id],
+  );
+  res.json({ step: (await loadPipeline()).find((s) => s.id === id) });
 });
 
-adminRouter.delete("/pipeline/:id", (req, res) => {
-  db.prepare("DELETE FROM pipeline_steps WHERE id = ?").run(String(req.params.id));
+adminRouter.delete("/pipeline/:id", async (req, res) => {
+  await q.run("DELETE FROM pipeline_steps WHERE id = ?", [String(req.params.id)]);
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- Resources
-adminRouter.get("/resources", (_req, res) => {
-  res.json({ resources: loadResources() });
+adminRouter.get("/resources", async (_req, res) => {
+  res.json({ resources: await loadResources() });
 });
 
 const resourceSchema = z.object({
@@ -690,24 +716,30 @@ const resourceSchema = z.object({
   content: z.string().max(60000).default(""),
 });
 
-adminRouter.post("/resources", (req, res) => {
+adminRouter.post("/resources", async (req, res) => {
   const parsed = resourceSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Resource needs a name" });
     return;
   }
   const d = parsed.data;
-  const order = (db.prepare("SELECT COALESCE(MAX(order_index), -1) + 1 AS o FROM resources").get() as Row).o as number;
-  const result = db
-    .prepare("INSERT INTO resources (name, url, description, category, icon, content, order_index) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(d.name, d.url, d.description, d.category, d.icon, d.content, order);
+  const order = Number((await q.get<Row>("SELECT COALESCE(MAX(order_index), -1) + 1 AS o FROM resources"))?.o) || 0;
+  const result = await q.run("INSERT INTO resources (name, url, description, category, icon, content, order_index) VALUES (?, ?, ?, ?, ?, ?, ?)", [
+    d.name,
+    d.url,
+    d.description,
+    d.category,
+    d.icon,
+    d.content,
+    order,
+  ]);
   const id = Number(result.lastInsertRowid);
-  res.status(201).json({ resource: loadResources().find((r) => r.id === id) });
+  res.status(201).json({ resource: (await loadResources()).find((r) => r.id === id) });
 });
 
-adminRouter.put("/resources/:id", (req, res) => {
+adminRouter.put("/resources/:id", async (req, res) => {
   const id = Number(req.params.id);
-  if (!db.prepare("SELECT 1 FROM resources WHERE id = ?").get(id)) {
+  if (!(await q.get("SELECT 1 FROM resources WHERE id = ?", [id]))) {
     res.status(404).json({ error: "Resource not found" });
     return;
   }
@@ -717,20 +749,28 @@ adminRouter.put("/resources/:id", (req, res) => {
     return;
   }
   const d = parsed.data;
-  db.prepare("UPDATE resources SET name = ?, url = ?, description = ?, category = ?, icon = ?, content = ? WHERE id = ?").run(d.name, d.url, d.description, d.category, d.icon, d.content, id);
-  res.json({ resource: loadResources().find((r) => r.id === id) });
+  await q.run("UPDATE resources SET name = ?, url = ?, description = ?, category = ?, icon = ?, content = ? WHERE id = ?", [
+    d.name,
+    d.url,
+    d.description,
+    d.category,
+    d.icon,
+    d.content,
+    id,
+  ]);
+  res.json({ resource: (await loadResources()).find((r) => r.id === id) });
 });
 
-adminRouter.delete("/resources/:id", (req, res) => {
-  db.prepare("DELETE FROM resources WHERE id = ?").run(Number(req.params.id));
+adminRouter.delete("/resources/:id", async (req, res) => {
+  await q.run("DELETE FROM resources WHERE id = ?", [Number(req.params.id)]);
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- Inbox / lists
-adminRouter.get("/messages", (req, res) => {
+adminRouter.get("/messages", async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : "";
   const where = ["new", "read", "replied", "archived"].includes(status) ? "WHERE status = ?" : "";
-  const rows = db.prepare(`SELECT * FROM messages ${where} ORDER BY created_at DESC LIMIT 500`).all(...(where ? [status] : [])) as Row[];
+  const rows = await q.all<Row>(`SELECT * FROM messages ${where} ORDER BY created_at DESC LIMIT 500`, where ? [status] : []);
   res.json({
     messages: rows.map((r) => ({
       id: Number(r.id),
@@ -748,34 +788,34 @@ adminRouter.get("/messages", (req, res) => {
   });
 });
 
-adminRouter.patch("/messages/:id", (req, res) => {
+adminRouter.patch("/messages/:id", async (req, res) => {
   const parsed = z.object({ status: z.enum(["new", "read", "replied", "archived"]).optional(), adminNote: z.string().max(2000).optional() }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid update" });
     return;
   }
   const id = Number(req.params.id);
-  const row = db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as Row | undefined;
+  const row = await q.get<Row>("SELECT * FROM messages WHERE id = ?", [id]);
   if (!row) {
     res.status(404).json({ error: "Message not found" });
     return;
   }
-  db.prepare("UPDATE messages SET status = ?, admin_note = ? WHERE id = ?").run(parsed.data.status ?? row.status, parsed.data.adminNote ?? row.admin_note, id);
+  await q.run("UPDATE messages SET status = ?, admin_note = ? WHERE id = ?", [parsed.data.status ?? row.status, parsed.data.adminNote ?? row.admin_note, id]);
   res.json({ ok: true });
 });
 
-adminRouter.delete("/messages/:id", (req, res) => {
-  db.prepare("DELETE FROM messages WHERE id = ?").run(Number(req.params.id));
+adminRouter.delete("/messages/:id", async (req, res) => {
+  await q.run("DELETE FROM messages WHERE id = ?", [Number(req.params.id)]);
   res.json({ ok: true });
 });
 
-adminRouter.get("/waitlist", (_req, res) => {
-  const rows = db.prepare("SELECT * FROM waitlist ORDER BY created_at DESC LIMIT 1000").all() as Row[];
+adminRouter.get("/waitlist", async (_req, res) => {
+  const rows = await q.all<Row>("SELECT * FROM waitlist ORDER BY created_at DESC LIMIT 1000");
   res.json({ entries: rows.map((r) => ({ id: Number(r.id), email: r.email, socialLink: r.social_link, phone: r.phone, source: r.source, createdAt: r.created_at })) });
 });
 
-adminRouter.get("/waitlist.csv", (_req, res) => {
-  const rows = db.prepare("SELECT email, social_link, phone, source, created_at FROM waitlist ORDER BY created_at DESC").all() as Row[];
+adminRouter.get("/waitlist.csv", async (_req, res) => {
+  const rows = await q.all<Row>("SELECT email, social_link, phone, source, created_at FROM waitlist ORDER BY created_at DESC");
   const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const csv = ["email,social_link,phone,source,created_at", ...rows.map((r) => [r.email, r.social_link, r.phone, r.source, r.created_at].map(esc).join(","))].join("\n");
   res.setHeader("content-type", "text/csv");
@@ -783,37 +823,37 @@ adminRouter.get("/waitlist.csv", (_req, res) => {
   res.send(csv);
 });
 
-adminRouter.delete("/waitlist/:id", (req, res) => {
-  db.prepare("DELETE FROM waitlist WHERE id = ?").run(Number(req.params.id));
+adminRouter.delete("/waitlist/:id", async (req, res) => {
+  await q.run("DELETE FROM waitlist WHERE id = ?", [Number(req.params.id)]);
   res.json({ ok: true });
 });
 
-adminRouter.get("/subscribers", (_req, res) => {
-  const rows = db.prepare("SELECT * FROM subscribers ORDER BY created_at DESC LIMIT 2000").all() as Row[];
+adminRouter.get("/subscribers", async (_req, res) => {
+  const rows = await q.all<Row>("SELECT * FROM subscribers ORDER BY created_at DESC LIMIT 2000");
   res.json({ subscribers: rows.map((r) => ({ id: Number(r.id), email: r.email, status: r.status, createdAt: r.created_at })) });
 });
 
-adminRouter.get("/subscribers.csv", (_req, res) => {
-  const rows = db.prepare("SELECT email, status, created_at FROM subscribers ORDER BY created_at DESC").all() as Row[];
+adminRouter.get("/subscribers.csv", async (_req, res) => {
+  const rows = await q.all<Row>("SELECT email, status, created_at FROM subscribers ORDER BY created_at DESC");
   const csv = ["email,status,created_at", ...rows.map((r) => `"${r.email}","${r.status}","${r.created_at}"`)].join("\n");
   res.setHeader("content-type", "text/csv");
   res.setHeader("content-disposition", 'attachment; filename="subscribers.csv"');
   res.send(csv);
 });
 
-adminRouter.delete("/subscribers/:id", (req, res) => {
-  db.prepare("DELETE FROM subscribers WHERE id = ?").run(Number(req.params.id));
+adminRouter.delete("/subscribers/:id", async (req, res) => {
+  await q.run("DELETE FROM subscribers WHERE id = ?", [Number(req.params.id)]);
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- Settings
-adminRouter.get("/settings", (_req, res) => {
-  res.json({ site: getSiteSettings(), tutor: maskedTutorSettings() });
+adminRouter.get("/settings", async (_req, res) => {
+  res.json({ site: await getSiteSettings(), tutor: await maskedTutorSettings() });
 });
 
-adminRouter.put("/settings/site", (req, res) => {
+adminRouter.put("/settings/site", async (req, res) => {
   const patch = req.body && typeof req.body === "object" ? req.body : {};
-  res.json({ site: saveSiteSettings(patch) });
+  res.json({ site: await saveSiteSettings(patch) });
 });
 
 const tutorPatchSchema = z.object({
@@ -827,7 +867,7 @@ const tutorPatchSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
-adminRouter.put("/settings/tutor", (req, res) => {
+adminRouter.put("/settings/tutor", async (req, res) => {
   const parsed = tutorPatchSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid tutor settings" });
@@ -837,29 +877,27 @@ adminRouter.put("/settings/tutor", (req, res) => {
   // Masked values coming back from the form must not overwrite stored keys.
   if (patch.anthropicApiKey !== undefined && (patch.anthropicApiKey.includes("*") || patch.anthropicApiKey === "")) delete patch.anthropicApiKey;
   if (patch.geminiApiKey !== undefined && (patch.geminiApiKey.includes("*") || patch.geminiApiKey === "")) delete patch.geminiApiKey;
-  saveTutorSettings(patch);
-  res.json({ tutor: maskedTutorSettings() });
+  await saveTutorSettings(patch);
+  res.json({ tutor: await maskedTutorSettings() });
 });
 
-adminRouter.post("/settings/tutor/clear-key", (req, res) => {
+adminRouter.post("/settings/tutor/clear-key", async (req, res) => {
   const provider = req.body?.provider;
-  if (provider === "anthropic") saveTutorSettings({ anthropicApiKey: "" });
-  else if (provider === "gemini") saveTutorSettings({ geminiApiKey: "" });
-  res.json({ tutor: maskedTutorSettings() });
+  if (provider === "anthropic") await saveTutorSettings({ anthropicApiKey: "" });
+  else if (provider === "gemini") await saveTutorSettings({ geminiApiKey: "" });
+  res.json({ tutor: await maskedTutorSettings() });
 });
 
 adminRouter.post("/settings/tutor/test", async (_req, res) => {
   const started = Date.now();
   const result = await runTutor([{ role: "user", text: "Reply with one short sentence confirming you are online, then name one NumPy function." }], { page: "admin-test" });
-  res.json({ ...result, ms: Date.now() - started, configuredProvider: getTutorSettings().provider });
+  res.json({ ...result, ms: Date.now() - started, configuredProvider: (await getTutorSettings()).provider });
 });
 
-adminRouter.get("/tutor/logs", (_req, res) => {
-  const rows = db
-    .prepare(
-      `SELECT t.*, u.name AS user_name, u.email AS user_email FROM tutor_logs t LEFT JOIN users u ON u.id = t.user_id ORDER BY t.created_at DESC LIMIT 200`,
-    )
-    .all() as Row[];
+adminRouter.get("/tutor/logs", async (_req, res) => {
+  const rows = await q.all<Row>(
+    `SELECT t.*, u.name AS user_name, u.email AS user_email FROM tutor_logs t LEFT JOIN users u ON u.id = t.user_id ORDER BY t.created_at DESC LIMIT 200`,
+  );
   res.json({
     logs: rows.map((r) => ({
       id: Number(r.id),
@@ -875,7 +913,7 @@ adminRouter.get("/tutor/logs", (_req, res) => {
   });
 });
 
-adminRouter.delete("/tutor/logs", (_req, res) => {
-  db.exec("DELETE FROM tutor_logs");
+adminRouter.delete("/tutor/logs", async (_req, res) => {
+  await q.exec("DELETE FROM tutor_logs");
   res.json({ ok: true });
 });

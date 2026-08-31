@@ -1,4 +1,4 @@
-import { db, nowIso } from "./db.js";
+import { q, nowIso } from "./db.js";
 import { loadModules } from "./content.js";
 import type { ActivityItem, Badge, ProgressSummary } from "./types.js";
 
@@ -14,10 +14,8 @@ function shiftDay(key: string, delta: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function computeStreaks(userId: number): { streak: number; longestStreak: number; activeDays: number } {
-  const rows = db
-    .prepare("SELECT DISTINCT substr(created_at, 1, 10) AS day FROM activity WHERE user_id = ? ORDER BY day DESC")
-    .all(userId) as Row[];
+export async function computeStreaks(userId: number): Promise<{ streak: number; longestStreak: number; activeDays: number }> {
+  const rows = await q.all<Row>("SELECT DISTINCT substr(created_at, 1, 10) AS day FROM activity WHERE user_id = ? ORDER BY day DESC", [userId]);
   const days = rows.map((r) => String(r.day));
   if (days.length === 0) return { streak: 0, longestStreak: 0, activeDays: 0 };
 
@@ -47,20 +45,22 @@ export function computeStreaks(userId: number): { streak: number; longestStreak:
   return { streak, longestStreak: Math.max(longest, streak), activeDays: days.length };
 }
 
-export function computeProgress(userId: number): ProgressSummary {
-  const completedRows = db.prepare("SELECT lesson_id, completed_at FROM progress WHERE user_id = ? ORDER BY completed_at").all(userId) as Row[];
+export async function computeProgress(userId: number): Promise<ProgressSummary> {
+  const completedRows = await q.all<Row>("SELECT lesson_id, completed_at FROM progress WHERE user_id = ? ORDER BY completed_at", [userId]);
   const completed = completedRows.map((r) => String(r.lesson_id));
   const completedSet = new Set(completed);
-  const xpRow = db.prepare("SELECT COALESCE(SUM(xp), 0) AS xp FROM activity WHERE user_id = ?").get(userId) as Row;
-  const quizRow = db
-    .prepare("SELECT COUNT(*) AS attempts, COALESCE(SUM(score), 0) AS correct, COALESCE(SUM(total), 0) AS total FROM quiz_attempts WHERE user_id = ?")
-    .get(userId) as Row;
-  const perfectQuiz = db
-    .prepare("SELECT created_at FROM quiz_attempts WHERE user_id = ? AND total >= 2 AND score = total ORDER BY created_at LIMIT 1")
-    .get(userId) as Row | undefined;
-  const { streak, longestStreak } = computeStreaks(userId);
+  const xpRow = await q.get<Row>("SELECT COALESCE(SUM(xp), 0) AS xp FROM activity WHERE user_id = ?", [userId]);
+  const quizRow = await q.get<Row>(
+    "SELECT COUNT(*) AS attempts, COALESCE(SUM(score), 0) AS correct, COALESCE(SUM(total), 0) AS total FROM quiz_attempts WHERE user_id = ?",
+    [userId],
+  );
+  const perfectQuiz = await q.get<Row>(
+    "SELECT created_at FROM quiz_attempts WHERE user_id = ? AND total >= 2 AND score = total ORDER BY created_at LIMIT 1",
+    [userId],
+  );
+  const { streak, longestStreak } = await computeStreaks(userId);
 
-  const modules = loadModules();
+  const modules = await loadModules();
   const totalLessons = modules.reduce((n, m) => n + m.lessons.length, 0);
   const completedAt = (id: string) => completedRows.find((r) => r.lesson_id === id)?.completed_at ?? null;
 
@@ -92,7 +92,7 @@ export function computeProgress(userId: number): ProgressSummary {
     earned: totalLessons > 0 && completed.length >= totalLessons,
   });
 
-  const recent = db.prepare("SELECT id, type, ref_id, xp, created_at FROM activity WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 12").all(userId) as Row[];
+  const recent = await q.all<Row>("SELECT id, type, ref_id, xp, created_at FROM activity WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 12", [userId]);
   const recentActivity: ActivityItem[] = recent.map((r) => ({ id: Number(r.id), type: String(r.type), refId: r.ref_id ?? null, xp: Number(r.xp) || 0, createdAt: String(r.created_at) }));
 
   return {
@@ -107,30 +107,30 @@ export function computeProgress(userId: number): ProgressSummary {
   };
 }
 
-export function completeLesson(userId: number, lessonId: string): { alreadyDone: boolean; xpAwarded: number } {
-  const lesson = db.prepare("SELECT id, xp FROM lessons WHERE id = ?").get(lessonId) as Row | undefined;
+export async function completeLesson(userId: number, lessonId: string): Promise<{ alreadyDone: boolean; xpAwarded: number }> {
+  const lesson = await q.get<Row>("SELECT id, xp FROM lessons WHERE id = ?", [lessonId]);
   if (!lesson) throw Object.assign(new Error("Lesson not found"), { status: 404 });
-  const existing = db.prepare("SELECT 1 FROM progress WHERE user_id = ? AND lesson_id = ?").get(userId, lessonId);
+  const existing = await q.get("SELECT 1 FROM progress WHERE user_id = ? AND lesson_id = ?", [userId, lessonId]);
   if (existing) return { alreadyDone: true, xpAwarded: 0 };
   const now = nowIso();
   const xp = Number(lesson.xp) || 50;
-  db.prepare("INSERT INTO progress (user_id, lesson_id, completed_at) VALUES (?, ?, ?)").run(userId, lessonId, now);
-  db.prepare("INSERT INTO activity (user_id, type, ref_id, xp, created_at) VALUES (?, 'lesson', ?, ?, ?)").run(userId, lessonId, xp, now);
+  await q.run("INSERT INTO progress (user_id, lesson_id, completed_at) VALUES (?, ?, ?)", [userId, lessonId, now]);
+  await q.run("INSERT INTO activity (user_id, type, ref_id, xp, created_at) VALUES (?, 'lesson', ?, ?, ?)", [userId, lessonId, xp, now]);
   return { alreadyDone: false, xpAwarded: xp };
 }
 
-export function recordQuiz(userId: number, lessonId: string, score: number, total: number): { xpAwarded: number } {
+export async function recordQuiz(userId: number, lessonId: string, score: number, total: number): Promise<{ xpAwarded: number }> {
   const now = nowIso();
-  db.prepare("INSERT INTO quiz_attempts (user_id, lesson_id, score, total, created_at) VALUES (?, ?, ?, ?, ?)").run(userId, lessonId, score, total, now);
+  await q.run("INSERT INTO quiz_attempts (user_id, lesson_id, score, total, created_at) VALUES (?, ?, ?, ?, ?)", [userId, lessonId, score, total, now]);
   const perfect = total >= 1 && score === total;
   const xp = 5 + (perfect ? 20 : 0);
-  db.prepare("INSERT INTO activity (user_id, type, ref_id, xp, created_at) VALUES (?, ?, ?, ?, ?)").run(userId, perfect ? "quiz_perfect" : "quiz", lessonId, xp, now);
+  await q.run("INSERT INTO activity (user_id, type, ref_id, xp, created_at) VALUES (?, ?, ?, ?, ?)", [userId, perfect ? "quiz_perfect" : "quiz", lessonId, xp, now]);
   return { xpAwarded: xp };
 }
 
-export function recordPlaygroundRun(userId: number): void {
+export async function recordPlaygroundRun(userId: number): Promise<void> {
   const today = nowIso().slice(0, 10);
-  const already = db.prepare("SELECT 1 FROM activity WHERE user_id = ? AND type = 'playground' AND substr(created_at,1,10) = ?").get(userId, today);
+  const already = await q.get("SELECT 1 FROM activity WHERE user_id = ? AND type = 'playground' AND substr(created_at,1,10) = ?", [userId, today]);
   if (already) return;
-  db.prepare("INSERT INTO activity (user_id, type, ref_id, xp, created_at) VALUES (?, 'playground', NULL, 10, ?)").run(userId, nowIso());
+  await q.run("INSERT INTO activity (user_id, type, ref_id, xp, created_at) VALUES (?, 'playground', NULL, 10, ?)", [userId, nowIso()]);
 }

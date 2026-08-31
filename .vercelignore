@@ -1,0 +1,6 @@
+node_modules
+server/data
+docs
+*.zip
+client/dist
+server/dist

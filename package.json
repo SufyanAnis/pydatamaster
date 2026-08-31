@@ -2,6 +2,7 @@
   "name": "pydatamaster",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "PyDataMaster i.o. - interactive Python data-science learning platform with admin panel",
   "workspaces": [
     "client",

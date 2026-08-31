@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { db, nowIso } from "../db.js";
+import { q, nowIso } from "../db.js";
 
 export const formsRouter = Router();
 
@@ -26,7 +26,7 @@ const contactSchema = z.object({
   website: z.string().max(0).optional(), // honeypot
 });
 
-formsRouter.post("/contact", (req, res) => {
+formsRouter.post("/contact", async (req, res) => {
   const parsed = contactSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Please complete the required fields with valid values." });
@@ -37,10 +37,11 @@ formsRouter.post("/contact", (req, res) => {
     return;
   }
   const d = parsed.data;
-  db.prepare(
+  await q.run(
     `INSERT INTO messages (first_name, last_name, email, message, profession, education, social, status, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?)`,
-  ).run(d.firstName, d.lastName, d.email, d.message, d.profession, d.education, d.social, nowIso());
+    [d.firstName, d.lastName, d.email, d.message, d.profession, d.education, d.social, nowIso()],
+  );
   res.status(201).json({ ok: true });
 });
 
@@ -51,7 +52,7 @@ const waitlistSchema = z.object({
   source: z.string().trim().max(40).optional().default("playground"),
 });
 
-formsRouter.post("/waitlist", (req, res) => {
+formsRouter.post("/waitlist", async (req, res) => {
   const parsed = waitlistSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Please enter a valid email address." });
@@ -62,17 +63,17 @@ formsRouter.post("/waitlist", (req, res) => {
     return;
   }
   const d = parsed.data;
-  db.prepare("INSERT INTO waitlist (email, social_link, phone, source, created_at) VALUES (?, ?, ?, ?, ?)").run(
+  await q.run("INSERT INTO waitlist (email, social_link, phone, source, created_at) VALUES (?, ?, ?, ?, ?)", [
     d.email.toLowerCase(),
     d.socialLink,
     d.phone,
     d.source,
     nowIso(),
-  );
+  ]);
   res.status(201).json({ ok: true });
 });
 
-formsRouter.post("/subscribe", (req, res) => {
+formsRouter.post("/subscribe", async (req, res) => {
   const parsed = z.object({ email: z.string().trim().email().max(160) }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Please enter a valid email address." });
@@ -82,9 +83,9 @@ formsRouter.post("/subscribe", (req, res) => {
     res.status(429).json({ error: "Too many requests. Please try again later." });
     return;
   }
-  db.prepare("INSERT INTO subscribers (email, status, created_at) VALUES (?, 'active', ?) ON CONFLICT(email) DO UPDATE SET status = 'active'").run(
+  await q.run("INSERT INTO subscribers (email, status, created_at) VALUES (?, 'active', ?) ON CONFLICT(email) DO UPDATE SET status = 'active'", [
     parsed.data.email.toLowerCase(),
     nowIso(),
-  );
+  ]);
   res.status(201).json({ ok: true });
 });

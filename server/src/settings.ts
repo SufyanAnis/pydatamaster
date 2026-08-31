@@ -1,4 +1,4 @@
-import { db } from "./db.js";
+import { q } from "./db.js";
 import type { SiteSettings, TutorSettings } from "./types.js";
 
 export const DEFAULT_SITE: SiteSettings = {
@@ -114,8 +114,8 @@ export const DEFAULT_TUTOR: TutorSettings = {
   enabled: true,
 };
 
-export function getSetting<T>(key: string, fallback: T): T {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+export async function getSetting<T>(key: string, fallback: T): Promise<T> {
+  const row = await q.get<{ value: string }>("SELECT value FROM settings WHERE key = ?", [key]);
   if (!row) return fallback;
   try {
     return JSON.parse(row.value) as T;
@@ -124,10 +124,11 @@ export function getSetting<T>(key: string, fallback: T): T {
   }
 }
 
-export function setSetting(key: string, value: unknown): void {
-  db.prepare(
-    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  ).run(key, JSON.stringify(value));
+export async function setSetting(key: string, value: unknown): Promise<void> {
+  await q.run("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [
+    key,
+    JSON.stringify(value),
+  ]);
 }
 
 function mergeDeep<T extends Record<string, any>>(base: T, patch: Partial<T> | undefined): T {
@@ -145,35 +146,35 @@ function mergeDeep<T extends Record<string, any>>(base: T, patch: Partial<T> | u
   return out as T;
 }
 
-export function getSiteSettings(): SiteSettings {
-  return mergeDeep(DEFAULT_SITE, getSetting<Partial<SiteSettings>>("site", {}));
+export async function getSiteSettings(): Promise<SiteSettings> {
+  return mergeDeep(DEFAULT_SITE, await getSetting<Partial<SiteSettings>>("site", {}));
 }
 
-export function saveSiteSettings(patch: Partial<SiteSettings>): SiteSettings {
-  const merged = mergeDeep(getSiteSettings(), patch);
-  setSetting("site", merged);
+export async function saveSiteSettings(patch: Partial<SiteSettings>): Promise<SiteSettings> {
+  const merged = mergeDeep(await getSiteSettings(), patch);
+  await setSetting("site", merged);
   return merged;
 }
 
-export function getTutorSettings(): TutorSettings {
-  const stored = mergeDeep(DEFAULT_TUTOR, getSetting<Partial<TutorSettings>>("tutor", {}));
+export async function getTutorSettings(): Promise<TutorSettings> {
+  const stored = mergeDeep(DEFAULT_TUTOR, await getSetting<Partial<TutorSettings>>("tutor", {}));
   // Environment keys act as fallbacks when nothing is stored in the DB.
   if (!stored.anthropicApiKey && process.env.ANTHROPIC_API_KEY) stored.anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   if (!stored.geminiApiKey && process.env.GEMINI_API_KEY) stored.geminiApiKey = process.env.GEMINI_API_KEY;
   return stored;
 }
 
-export function saveTutorSettings(patch: Partial<TutorSettings>): TutorSettings {
-  const current = mergeDeep(DEFAULT_TUTOR, getSetting<Partial<TutorSettings>>("tutor", {}));
+export async function saveTutorSettings(patch: Partial<TutorSettings>): Promise<TutorSettings> {
+  const current = mergeDeep(DEFAULT_TUTOR, await getSetting<Partial<TutorSettings>>("tutor", {}));
   const merged = mergeDeep(current, patch);
-  setSetting("tutor", merged);
+  await setSetting("tutor", merged);
   return getTutorSettings();
 }
 
 /** Settings that are safe to expose to any visitor. Never includes API keys. */
-export function publicSettings() {
-  const site = getSiteSettings();
-  const tutor = getTutorSettings();
+export async function publicSettings() {
+  const site = await getSiteSettings();
+  const tutor = await getTutorSettings();
   const hasKey =
     (tutor.provider === "anthropic" && !!tutor.anthropicApiKey) ||
     (tutor.provider === "gemini" && !!tutor.geminiApiKey) ||
@@ -190,8 +191,8 @@ export function publicSettings() {
 }
 
 /** Admin view of tutor settings with keys masked. */
-export function maskedTutorSettings() {
-  const t = getTutorSettings();
+export async function maskedTutorSettings() {
+  const t = await getTutorSettings();
   const mask = (k: string) => (k ? `${k.slice(0, 6)}${"*".repeat(Math.max(0, Math.min(12, k.length - 10)))}${k.slice(-4)}` : "");
   return {
     ...t,

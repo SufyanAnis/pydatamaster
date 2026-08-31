@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import Anthropic from "@anthropic-ai/sdk";
-import { db, nowIso } from "../db.js";
+import { q, nowIso } from "../db.js";
 import { getSiteSettings, getTutorSettings } from "../settings.js";
 import { offlineTutorAnswer } from "../tutor-offline.js";
 import type { TutorSettings } from "../types.js";
@@ -115,12 +115,12 @@ export async function askGemini(settings: TutorSettings, system: string, message
 }
 
 export async function runTutor(messages: ChatMessage[], context?: z.infer<typeof chatSchema>["context"]): Promise<TutorResult & { note?: string }> {
-  const settings = getTutorSettings();
+  const settings = await getTutorSettings();
   const system = buildSystemPrompt(settings, context);
   const lastUser = [...messages].reverse().find((m) => m.role === "user")?.text ?? "";
 
-  const offline = (note?: string) => ({
-    reply: offlineTutorAnswer(lastUser, { lessonTitle: context?.lessonTitle, code: context?.code }),
+  const offline = async (note?: string) => ({
+    reply: await offlineTutorAnswer(lastUser, { lessonTitle: context?.lessonTitle, code: context?.code }),
     provider: "offline",
     model: "curriculum-search",
     tokensIn: 0,
@@ -152,8 +152,8 @@ export async function runTutor(messages: ChatMessage[], context?: z.infer<typeof
 }
 
 tutorRouter.post("/chat", async (req, res) => {
-  const site = getSiteSettings();
-  const tutor = getTutorSettings();
+  const site = await getSiteSettings();
+  const tutor = await getTutorSettings();
   if (!site.features.aiTutor || !tutor.enabled) {
     res.status(503).json({ error: "The AI Tutor is currently disabled." });
     return;
@@ -172,8 +172,9 @@ tutorRouter.post("/chat", async (req, res) => {
   const messages = parsed.data.messages.slice(-12);
   const lastUser = [...messages].reverse().find((m) => m.role === "user")?.text ?? "";
   const result = await runTutor(messages, parsed.data.context);
-  db.prepare(
+  await q.run(
     "INSERT INTO tutor_logs (user_id, question, answer, provider, model, tokens_in, tokens_out, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-  ).run(req.user?.id ?? null, lastUser.slice(0, 2000), result.reply.slice(0, 6000), result.provider, result.model, result.tokensIn, result.tokensOut, nowIso());
+    [req.user?.id ?? null, lastUser.slice(0, 2000), result.reply.slice(0, 6000), result.provider, result.model, result.tokensIn, result.tokensOut, nowIso()],
+  );
   res.json({ reply: result.reply, provider: result.provider, model: result.model, note: result.note ?? null });
 });
