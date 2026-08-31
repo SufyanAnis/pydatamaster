@@ -77,8 +77,12 @@ async function createLibsqlDriver(): Promise<Driver> {
 
 async function createNodeSqliteDriver(): Promise<Driver> {
   const { DatabaseSync } = await import("node:sqlite");
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+  // Serverless bundles are read-only; only the DB_PATH parent (e.g. /tmp) must be writable.
+  try {
+    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+  } catch {
+    // Directory may already exist or the filesystem is read-only; DatabaseSync will surface real errors.
+  }
   const db = new DatabaseSync(DB_PATH);
   try {
     db.exec("PRAGMA journal_mode = WAL;");

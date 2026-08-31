@@ -9,8 +9,18 @@
     }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/uploads/(.*)", "destination": "/api/index" },
-    { "source": "/((?!assets/|covers/|api/|uploads/|favicon\\.svg|og\\.png|robots\\.txt).*)", "destination": "/index.html" }
-  ]
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/uploads/(.*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/((?!assets/|covers/|api/|uploads/|favicon\\.svg|og\\.png|robots\\.txt).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "framework": null
 }
