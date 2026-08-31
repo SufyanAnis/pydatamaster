@@ -458,5 +458,19 @@ export function seedBlog(): BlogSeedReport {
     if (Number(r.changes) > 0) report.lessonPosts++;
   });
 
+  // Assign branded cover images (shipped in client/public/covers) to posts that have none.
+  const COVER_SETS: Record<string, number> = { python: 2, numpy: 2, pandas: 2, matplotlib: 2, seaborn: 1, "basic-libraries": 1, "scikit-learn": 1 };
+  const bare = db.prepare("SELECT id, category FROM posts WHERE cover_image = '' ORDER BY published_at").all() as Record<string, any>[];
+  const counters = new Map<string, number>();
+  const setCover = db.prepare("UPDATE posts SET cover_image = ? WHERE id = ?");
+  for (const p of bare) {
+    const cat = String(p.category);
+    const variants = COVER_SETS[cat] ?? 0;
+    const n = counters.get(cat) ?? 0;
+    counters.set(cat, n + 1);
+    const cover = variants > 0 ? `/covers/${cat}-${(n % variants) + 1}.svg` : `/covers/generic-${(n % 2) + 1}.svg`;
+    setCover.run(cover, p.id);
+  }
+
   return report;
 }
