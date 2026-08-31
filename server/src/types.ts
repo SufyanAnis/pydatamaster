@@ -62,13 +62,29 @@ export interface Post {
   title: string;
   excerpt: string;
   content: string; // markdown
-  category: string;
+  category: string; // category slug
+  coverImage: string; // /uploads/... or external URL, optional
   author: string;
   readTime: string;
   published: boolean;
   publishedAt: string;
   views: number;
   updatedAt?: string;
+}
+
+export interface Category {
+  slug: string;
+  name: string;
+  description: string;
+  orderIndex: number;
+  showInNav: boolean;
+}
+
+export interface Page {
+  slug: string;
+  title: string;
+  content: string; // markdown
+  updatedAt: string;
 }
 
 export interface PipelineStep {
@@ -141,6 +157,7 @@ export interface SiteSettings {
   };
   pricing: { enabled: boolean; note: string; plans: PricingPlan[] };
   adsense: { enabled: boolean; clientId: string };
+  adsPlacements: { top: boolean; bottom: boolean; left: boolean; right: boolean; inContent: boolean };
 }
 
 export type TutorProvider = "anthropic" | "gemini" | "offline";

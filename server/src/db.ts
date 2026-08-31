@@ -18,6 +18,10 @@ function expandHome(p: string): string {
 
 export const DB_PATH = process.env.DB_PATH ? expandHome(process.env.DB_PATH) : path.join(dataDir, "pydatamaster.db");
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+/** Uploaded images live next to the database so they survive redeploys on hosts with a persistent data dir. */
+export const UPLOADS_DIR = process.env.UPLOADS_DIR ? expandHome(process.env.UPLOADS_DIR) : path.join(path.dirname(DB_PATH), "uploads");
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 export const db = new DatabaseSync(DB_PATH);
 
 db.exec("PRAGMA journal_mode = WAL;");
@@ -203,10 +207,28 @@ CREATE TABLE IF NOT EXISTS page_views (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_page_views_created ON page_views(created_at);
+
+CREATE TABLE IF NOT EXISTS categories (
+  slug TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  order_index INTEGER NOT NULL DEFAULT 0,
+  show_in_nav INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS pages (
+  slug TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
 `;
 
 export function migrate(): void {
   db.exec(SCHEMA);
+  // Additive column migrations for databases created before the blog pivot.
+  const postCols = (db.prepare("PRAGMA table_info(posts)").all() as { name: string }[]).map((c) => c.name);
+  if (!postCols.includes("cover_image")) db.exec("ALTER TABLE posts ADD COLUMN cover_image TEXT NOT NULL DEFAULT ''");
 }
 
 export function nowIso(): string {

@@ -61,7 +61,8 @@ export interface Post {
   title: string;
   excerpt: string;
   content: string;
-  category: string;
+  category: string; // category slug
+  coverImage: string;
   author: string;
   readTime: string;
   published: boolean;
@@ -70,6 +71,29 @@ export interface Post {
   updatedAt?: string;
 }
 export type PostSummary = Omit<Post, "content">;
+
+export interface Category {
+  slug: string;
+  name: string;
+  description: string;
+  orderIndex: number;
+  showInNav: boolean;
+  postCount?: number;
+}
+
+export interface Page {
+  slug: string;
+  title: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface UploadedFile {
+  name: string;
+  url: string;
+  size: number;
+  modifiedAt?: string;
+}
 
 export interface PipelineStep {
   id: string;
@@ -141,10 +165,12 @@ export interface SiteSettings {
   };
   pricing: { enabled: boolean; note: string; plans: PricingPlan[] };
   adsense: { enabled: boolean; clientId: string };
+  adsPlacements: { top: boolean; bottom: boolean; left: boolean; right: boolean; inContent: boolean };
 }
 
 export interface PublicSettings extends SiteSettings {
   tutor: { enabled: boolean; provider: string; configured: boolean; model: string };
+  nav: { slug: string; name: string }[];
 }
 
 export type TutorProvider = "anthropic" | "gemini" | "offline";
@@ -191,7 +217,7 @@ export interface Progress {
 }
 
 export interface SearchHit {
-  type: "lesson" | "post" | "pipeline" | "resource";
+  type: "post" | "page" | "category";
   id: string;
   title: string;
   subtitle: string;

@@ -1,6 +1,6 @@
 import type { PipelineStep, Post, Resource } from "./types.js";
 
-type SeedPost = Omit<Post, "views" | "updatedAt" | "published"> & { published?: boolean };
+type SeedPost = Omit<Post, "views" | "updatedAt" | "published" | "coverImage"> & { published?: boolean; coverImage?: string };
 
 export const POSTS: SeedPost[] = [
   {

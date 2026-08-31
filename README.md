@@ -1,95 +1,41 @@
 # PyDataMaster i.o.
 
-An interactive Python data-science learning platform - a rebuilt and enhanced version of
-[pydatamasterio.vercel.app](https://pydatamasterio.vercel.app/) with a real backend and a full admin panel.
+A clean, white-and-yellow **Python tutorial blog** with a full admin CMS. Every part of the public site -
+header tabs, articles, images, static pages, ads - is editable from the admin panel.
 
 ## What's inside
 
-**Learner site**
+**Public site** (blog-style, inspired by digital-library layouts)
 
-- 4 modules / 19 lessons (NumPy, Pandas, Matplotlib, Scikit-Learn) with markdown content, runnable code examples, interactive charts and quizzes
-- In-browser **Python playground** (Pyodide: real NumPy, Pandas, Matplotlib, Scikit-Learn - no install)
-- **AI Tutor** that knows which lesson / code you are looking at (Anthropic Claude by default, Gemini supported, offline curriculum-search fallback)
-- Accounts with XP, streaks, badges, per-module progress, leaderboard
-- Blog, Data Science Pipeline explorer (10 steps), resources + printable cheat sheets, pricing, contact & waitlist forms, global search (Ctrl+K), dark mode
+- Header tabs: **Home · Python · Basic Libraries of Python · NumPy · Pandas · Matplotlib · Seaborn** -
+  the category tabs are managed from the admin panel (add, rename, reorder, hide)
+- Home page with featured article, latest articles and one section per category - everything clicks through to content
+- Article pages with cover images, markdown content (headings, tables, images, dark syntax-highlighted code blocks) and related articles
+- Footer pages: **Privacy · About · Contact Us · DMCA · Terms** - all editable in the admin panel
+- Working contact form, global search (Ctrl+K), mobile-friendly, light-only white + amber theme
+- **Ad placements**: top banner, bottom banner, left rail, right rail and in-article - each can be switched on/off in settings
+- 27 seeded articles across all categories (legacy lesson URLs redirect to their article versions)
 
-**Admin panel** (`/admin`)
+**Admin CMS** (`/admin`)
 
-- Dashboard with KPIs and 30-day charts (sign-ups, completions, page views, tutor usage)
-- Users (roles, suspend, reset password, progress view)
-- Curriculum CMS (modules, lessons, code examples, quizzes, ordering, publish/draft)
-- Blog, pipeline steps and resources editors
-- Inbox for contact messages, waitlist + newsletter lists with CSV export
-- Site settings (hero copy, announcement bar, features, pricing plans, social links, AdSense) and AI tutor configuration (provider, model, API keys, system prompt, test button)
+- Dashboard: articles, page views (30-day chart), messages, users, most-viewed articles, articles per category
+- **Posts**: markdown editor with live preview, category picker, cover image, "insert image" via the media library
+- **Categories**: manage the header tabs (order, visibility, names) - changes appear on the live site immediately
+- **Pages**: edit Privacy/About/DMCA/Terms/Contact (and add custom pages at `/p/<slug>`)
+- **Media**: upload images (png/jpg/gif/webp, up to 8 MB), copy URL/markdown, delete
+- Inbox for contact-form messages, user management, site settings (branding, announcement bar, social links, AdSense + ad placements)
 
 ## Screenshots
 
-| Home (dark) | Lesson with quiz | Python playground |
+| Home | Article | Article with ads on |
 | --- | --- | --- |
-| ![Home](docs/screenshots/home-dark.png) | ![Lesson](docs/screenshots/lesson.png) | ![Playground](docs/screenshots/playground.png) |
+| ![Home](docs/screenshots/home.png) | ![Article](docs/screenshots/article.png) | ![Ads](docs/screenshots/article-with-ads.png) |
 
-| Admin dashboard | Curriculum editor | Learner progress |
+| Admin dashboard | Posts editor | Category tabs manager |
 | --- | --- | --- |
-| ![Dashboard](docs/screenshots/admin-dashboard.png) | ![Curriculum](docs/screenshots/admin-curriculum.png) | ![Progress](docs/screenshots/progress.png) |
+| ![Dashboard](docs/screenshots/admin-dashboard.png) | ![Posts](docs/screenshots/admin-posts.png) | ![Categories](docs/screenshots/admin-categories.png) |
 
 More in [docs/screenshots](docs/screenshots/).
-
-## Deployment
-
-The whole product (site + admin + API + SQLite database) ships as **one Node server**, so it needs a host that runs
-a long-lived process with a persistent disk. A production `Dockerfile` is included and configs are provided for the
-most common hosts. Static-only platforms (Vercel/Netlify) are not suitable without swapping the database.
-
-Environment variables (all optional except where noted):
-
-| Variable | Purpose |
-| --- | --- |
-| `PORT` | listening port (hosts usually inject this) |
-| `DB_PATH` | SQLite file location - point it at the persistent disk, e.g. `/data/pydatamaster.db` |
-| `JWT_SECRET` | cookie signing secret (auto-generated and stored in the DB if omitted) |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | first admin account, used only when the DB is created |
-| `ANTHROPIC_API_KEY` (or `GEMINI_API_KEY`) | AI tutor provider key (can also be set in Admin -> Settings) |
-
-### Option A - Hostinger (Node.js Web App, Business/Cloud plans)
-1. hPanel -> **Websites -> Add Website -> Deploy Web App -> Import Git Repository**, connect GitHub and pick this repo (branch `main`).
-2. Build settings: framework **Express** (or *Other*), **Node.js 24**, build command `npm run build`, entry file `index.mjs`.
-3. Environment variables:
-   - `DB_PATH=~/pydatamaster-data/pydatamaster.db` (keeps the database outside the app folder so redeploys never wipe it)
-   - `ADMIN_PASSWORD=<strong password>` (and `ADMIN_EMAIL` if you want a different login)
-   - `NODE_OPTIONS=--no-warnings=ExperimentalWarning` (optional, silences the SQLite notice in logs)
-   - `ANTHROPIC_API_KEY=<key>` (optional, enables the conversational AI tutor)
-4. Click **Deploy**. Every push to `main` redeploys automatically. Site: `https://<your-domain>/`, admin: `https://<your-domain>/admin`.
-
-### Option B - Railway
-1. Push this folder to a GitHub repository.
-2. In Railway: **New Project -> Deploy from GitHub repo** (it picks up the `Dockerfile` via `railway.json`).
-3. Service -> **Volumes -> Add volume**, mount path `/data`.
-4. Service -> **Variables**: `DB_PATH=/data/pydatamaster.db`, `ADMIN_PASSWORD=<strong password>`, optionally `ANTHROPIC_API_KEY`.
-5. Settings -> **Networking -> Generate domain**. Site is at `https://<domain>/`, admin at `https://<domain>/admin`.
-
-### Option C - Render
-1. Push to GitHub, then in Render choose **New -> Blueprint** and select the repo (`render.yaml` defines the service, disk and env vars).
-2. Fill in `ADMIN_PASSWORD` (and `ANTHROPIC_API_KEY` if you have one) when prompted. Persistent disks require the Starter plan.
-
-### Option D - Fly.io
-```bash
-fly launch --copy-config --no-deploy      # uses fly.toml
-fly volumes create pdm_data --size 1
-fly secrets set ADMIN_PASSWORD=... ANTHROPIC_API_KEY=...
-fly deploy
-```
-
-### Option E - Any VPS with Docker (including Hostinger VPS via Docker Manager)
-```bash
-docker compose up -d --build              # serves on port 4000; put Caddy/Nginx in front for HTTPS
-```
-
-After the first boot, log in at `/admin` with the admin account and change its password under Admin -> Users.
-
-## Stack
-
-- `client/` - Vite, React 18, TypeScript, Tailwind CSS, react-router, Recharts, CodeMirror
-- `server/` - Node 22+, Express, SQLite via the built-in `node:sqlite` module (no native build step), JWT cookies, bcrypt, zod, Anthropic SDK
 
 ## Run it
 
@@ -98,7 +44,7 @@ npm install          # installs both workspaces
 npm run dev          # API on http://localhost:4000, site on http://localhost:5173
 ```
 
-The database is created and seeded automatically on first start (`server/data/pydatamaster.db`).
+The database is created and seeded automatically on first start (categories, pages, 27 articles, admin account).
 
 Default admin account (change it in Admin -> Users after first login):
 
@@ -110,29 +56,62 @@ admin@pydatamaster.io / Admin@12345
 
 ```bash
 npm run build        # builds client/dist and server/dist
-npm start            # serves API + built client on http://localhost:4000
+npm start            # serves everything on http://localhost:4000
 ```
 
-### Configuration
+## Deployment
 
-Copy `.env.example` to `.env` (optional). Notable variables:
+The whole product (site + admin + API + SQLite database + uploaded images) ships as **one Node server**, so it
+needs a host that runs a long-lived process with persistent storage. A production `Dockerfile` is included and
+configs are provided for common hosts. Static-only platforms (Vercel/Netlify) are not suitable.
+
+Environment variables (all optional):
 
 | Variable | Purpose |
 | --- | --- |
-| `PORT` | HTTP port (default 4000) |
-| `JWT_SECRET` | Cookie signing secret (auto-generated and persisted if omitted) |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | Initial admin account (first run only) |
-| `ANTHROPIC_API_KEY` | AI tutor key (can also be set in Admin -> Settings -> AI Tutor) |
-| `GEMINI_API_KEY` | Alternative provider key |
-| `COOKIE_SECURE=1` | Set behind HTTPS in production |
+| `PORT` | listening port (hosts usually inject this) |
+| `DB_PATH` | SQLite file location, e.g. `/data/pydatamaster.db` or `~/pydatamaster-data/pydatamaster.db`. Uploaded images are stored next to it in `uploads/`. |
+| `JWT_SECRET` | cookie signing secret (auto-generated and stored in the DB if omitted) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | first admin account, used only when the DB is created |
 
-Without any AI key the tutor still works in *curriculum mode* (it answers from lesson content).
+### Option A - Hostinger (Node.js Web App, Business/Cloud plans)
+1. hPanel -> **Websites -> Add Website -> Deploy Web App** -> Import Git Repository (or upload a ZIP of this folder).
+2. Build settings: framework **Express** (or *Other*), **Node.js 24**, build command `npm run build`, entry file `index.mjs`.
+3. Environment variables:
+   - `DB_PATH=~/pydatamaster-data/pydatamaster.db` (keeps database + uploads outside the app folder so redeploys never wipe them)
+   - `ADMIN_PASSWORD=<strong password>`
+   - `NODE_OPTIONS=--no-warnings=ExperimentalWarning` (optional, silences the SQLite notice in logs)
+4. Click **Deploy**. Site: `https://<your-domain>/`, admin: `https://<your-domain>/admin`.
 
-### Useful scripts
+### Option B - Railway
+Deploy from GitHub (Dockerfile via `railway.json`), add a volume at `/data`, set `DB_PATH=/data/pydatamaster.db` and `ADMIN_PASSWORD`, generate a domain.
+
+### Option C - Render
+**New -> Blueprint** on the repo (`render.yaml` defines service, disk and env vars). Disks require the Starter plan.
+
+### Option D - Fly.io
+```bash
+fly launch --copy-config --no-deploy
+fly volumes create pdm_data --size 1
+fly secrets set ADMIN_PASSWORD=...
+fly deploy
+```
+
+### Option E - Any VPS with Docker (including Hostinger VPS via Docker Manager)
+```bash
+docker compose up -d --build              # serves on port 4000; put Caddy/Nginx in front for HTTPS
+```
+
+## Stack
+
+- `client/` - Vite, React 18, TypeScript, Tailwind CSS (light-only white + amber theme), react-router, Recharts (admin charts)
+- `server/` - Node 22.13+/24, Express, SQLite via the built-in `node:sqlite` module (no native build step), JWT cookies, bcrypt, zod
+
+## Useful scripts
 
 ```bash
 npm run seed -w server            # re-seed empty tables / ensure admin exists
-npm run seed -w server -- --force # reset all content tables to the defaults
+npm run seed -w server -- --force # reset content tables to the defaults
 npm run typecheck                 # TypeScript checks for both workspaces
 ```
 
@@ -140,14 +119,14 @@ npm run typecheck                 # TypeScript checks for both workspaces
 
 ```
 client/src
-  components/   layout, AI tutor, search, code block, charts, quiz, UI primitives
-  context/      auth + site (settings, curriculum, theme) providers
+  components/   layout (tabs header, footer, ads, search), blog cards, UI primitives
+  context/      auth + site (settings, nav) providers
   lib/          API client, types, markdown renderer, syntax highlighter, utils
-  pages/        public pages (home, courses, lesson, playground, blog, ...)
-  admin/        admin panel layout + pages
+  pages/        Home, CategoryPage, PostPage, StaticPage, Contact, Login, NotFound
+  admin/        admin CMS (dashboard, posts, categories, pages, media, inbox, users, settings)
 server/src
-  index.ts      Express app (serves client/dist in production)
-  db.ts         schema + migrations (node:sqlite)
-  seed*.ts      default curriculum, posts, pipeline, resources
-  routes/       auth, content, progress, forms, tutor, admin
+  index.ts      Express app (serves client/dist and /uploads in production)
+  db.ts         schema + migrations (node:sqlite) + uploads dir
+  seed*.ts      categories, pages, articles (incl. lesson-to-article conversion)
+  routes/       auth, content, forms, admin (posts/categories/pages/uploads/settings)
 ```

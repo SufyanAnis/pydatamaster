@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BookOpen, ExternalLink, FileText, Loader2, Search, Workflow, X, Link as LinkIcon } from "lucide-react";
+import { ExternalLink, FileText, FolderOpen, Info, Loader2, Search, X } from "lucide-react";
 import { api } from "../lib/api";
 import type { SearchHit } from "../lib/types";
 import { useSite } from "../context/SiteContext";
 import { cn } from "../lib/utils";
 
-const ICONS = { lesson: BookOpen, post: FileText, pipeline: Workflow, resource: LinkIcon };
+const ICONS = { post: FileText, page: Info, category: FolderOpen };
 
 export function SearchModal() {
   const { searchOpen, setSearchOpen } = useSite();
@@ -97,7 +97,7 @@ export function SearchModal() {
             const external = /^https?:\/\//.test(hit.href);
             return (
               <button key={`${hit.type}-${hit.id}`} onMouseEnter={() => setActive(i)} onClick={() => open(hit)} className={cn("w-full flex items-center gap-4 px-5 py-3 text-left transition-colors", i === active ? "bg-blue-50 dark:bg-blue-900/20" : "hover:bg-slate-50 dark:hover:bg-slate-800/60")}>
-                <span className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 text-blue-600 flex items-center justify-center shrink-0">
+                <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
                   <Ico size={16} />
                 </span>
                 <span className="min-w-0 flex-1">

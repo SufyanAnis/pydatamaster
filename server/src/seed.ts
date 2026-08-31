@@ -3,6 +3,7 @@ import { db, migrate, nowIso, countRows } from "./db.js";
 import { hashPassword, pickAvatarColor } from "./auth.js";
 import { CURRICULUM } from "./seed-curriculum.js";
 import { POSTS, PIPELINE, RESOURCES } from "./seed-content.js";
+import { seedBlog } from "./seed-blog.js";
 
 export interface SeedReport {
   modules: number;
@@ -10,6 +11,9 @@ export interface SeedReport {
   posts: number;
   pipeline: number;
   resources: number;
+  categories: number;
+  pages: number;
+  blogPosts: number;
   adminCreated: boolean;
   adminEmail: string;
 }
@@ -21,7 +25,7 @@ export interface SeedReport {
 export async function seedDatabase(opts: { force?: boolean } = {}): Promise<SeedReport> {
   migrate();
   const now = nowIso();
-  const report: SeedReport = { modules: 0, lessons: 0, posts: 0, pipeline: 0, resources: 0, adminCreated: false, adminEmail: "" };
+  const report: SeedReport = { modules: 0, lessons: 0, posts: 0, pipeline: 0, resources: 0, categories: 0, pages: 0, blogPosts: 0, adminCreated: false, adminEmail: "" };
 
   if (opts.force) {
     db.exec("DELETE FROM quiz_questions; DELETE FROM lessons; DELETE FROM modules; DELETE FROM posts; DELETE FROM pipeline_steps; DELETE FROM resources;");
@@ -85,6 +89,12 @@ export async function seedDatabase(opts: { force?: boolean } = {}): Promise<Seed
       report.resources++;
     });
   }
+
+  // ---- Blog (categories, pages, lesson-to-article conversion) -----------
+  const blog = seedBlog();
+  report.categories = blog.categories;
+  report.pages = blog.pages;
+  report.blogPosts = blog.extraPosts + blog.lessonPosts;
 
   // ---- Admin account ----------------------------------------------------
   const adminEmail = (process.env.ADMIN_EMAIL || "admin@pydatamaster.io").trim();

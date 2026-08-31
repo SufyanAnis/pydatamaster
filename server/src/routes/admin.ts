@@ -1,8 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { db, nowIso, slugify, countRows } from "../db.js";
+import { db, nowIso, slugify, countRows, UPLOADS_DIR } from "../db.js";
 import { findUserById, hashPassword, pickAvatarColor, requireAdmin, toPublicUser, type UserRow } from "../auth.js";
-import { loadModules, loadPipeline, loadPost, loadPosts, loadResources, rowToLesson, rowToModule, loadQuizForLessons } from "../content.js";
+import { loadCategories, loadModules, loadPage, loadPages, loadPipeline, loadPost, loadPosts, loadResources, rowToCategory, rowToLesson, rowToModule, loadQuizForLessons } from "../content.js";
 import { computeProgress } from "../progress-service.js";
 import { getSiteSettings, maskedTutorSettings, saveSiteSettings, saveTutorSettings, getTutorSettings } from "../settings.js";
 import { runTutor } from "./tutor.js";
@@ -394,7 +397,8 @@ const postSchema = z.object({
   title: z.string().trim().min(2).max(200),
   excerpt: z.string().max(600).default(""),
   content: z.string().max(100000).default(""),
-  category: z.string().trim().max(40).default("Tutorial"),
+  category: z.string().trim().max(60).default("python"),
+  coverImage: z.string().trim().max(500).default(""),
   author: z.string().trim().max(80).default("PyData Team"),
   readTime: z.string().trim().max(30).default("5 min read"),
   published: z.boolean().default(true),
@@ -413,8 +417,8 @@ adminRouter.post("/posts", (req, res) => {
   while (db.prepare("SELECT 1 FROM posts WHERE id = ?").get(id)) id = `${slugify(d.id || d.title)}-${++n}`;
   const now = nowIso();
   db.prepare(
-    `INSERT INTO posts (id, title, excerpt, content, category, author, read_time, published, published_at, views, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-  ).run(id, d.title, d.excerpt, d.content, d.category, d.author, d.readTime, d.published ? 1 : 0, d.publishedAt || now, now, now);
+    `INSERT INTO posts (id, title, excerpt, content, category, cover_image, author, read_time, published, published_at, views, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+  ).run(id, d.title, d.excerpt, d.content, d.category, d.coverImage, d.author, d.readTime, d.published ? 1 : 0, d.publishedAt || now, now, now);
   res.status(201).json({ post: loadPost(id, { includeUnpublished: true }) });
 });
 
@@ -432,13 +436,182 @@ adminRouter.put("/posts/:id", (req, res) => {
   }
   const d = parsed.data;
   db.prepare(
-    `UPDATE posts SET title = ?, excerpt = ?, content = ?, category = ?, author = ?, read_time = ?, published = ?, published_at = ?, updated_at = ? WHERE id = ?`,
-  ).run(d.title, d.excerpt, d.content, d.category, d.author, d.readTime, d.published ? 1 : 0, d.publishedAt || existing.publishedAt, nowIso(), id);
+    `UPDATE posts SET title = ?, excerpt = ?, content = ?, category = ?, cover_image = ?, author = ?, read_time = ?, published = ?, published_at = ?, updated_at = ? WHERE id = ?`,
+  ).run(d.title, d.excerpt, d.content, d.category, d.coverImage, d.author, d.readTime, d.published ? 1 : 0, d.publishedAt || existing.publishedAt, nowIso(), id);
   res.json({ post: loadPost(id, { includeUnpublished: true }) });
 });
 
 adminRouter.delete("/posts/:id", (req, res) => {
   db.prepare("DELETE FROM posts WHERE id = ?").run(String(req.params.id));
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- Categories (blog nav tabs)
+adminRouter.get("/categories", (_req, res) => {
+  const counts = db.prepare("SELECT category, COUNT(*) AS n FROM posts GROUP BY category").all() as Row[];
+  const countMap = new Map(counts.map((c) => [String(c.category), Number(c.n)]));
+  res.json({ categories: loadCategories().map((c) => ({ ...c, postCount: countMap.get(c.slug) ?? 0 })) });
+});
+
+const categorySchema = z.object({
+  slug: z.string().trim().max(60).optional(),
+  name: z.string().trim().min(1).max(60),
+  description: z.string().max(500).default(""),
+  showInNav: z.boolean().default(true),
+});
+
+adminRouter.post("/categories", (req, res) => {
+  const parsed = categorySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "A category needs a name." });
+    return;
+  }
+  const d = parsed.data;
+  let slug = slugify(d.slug || d.name);
+  let n = 1;
+  while (db.prepare("SELECT 1 FROM categories WHERE slug = ?").get(slug)) slug = `${slugify(d.slug || d.name)}-${++n}`;
+  const order = (db.prepare("SELECT COALESCE(MAX(order_index), -1) + 1 AS o FROM categories").get() as Row).o as number;
+  db.prepare("INSERT INTO categories (slug, name, description, order_index, show_in_nav) VALUES (?, ?, ?, ?, ?)").run(slug, d.name, d.description, order, d.showInNav ? 1 : 0);
+  res.status(201).json({ category: rowToCategory(db.prepare("SELECT * FROM categories WHERE slug = ?").get(slug) as Row) });
+});
+
+adminRouter.put("/categories/:slug", (req, res) => {
+  const slug = String(req.params.slug);
+  if (!db.prepare("SELECT 1 FROM categories WHERE slug = ?").get(slug)) {
+    res.status(404).json({ error: "Category not found" });
+    return;
+  }
+  const parsed = categorySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid category data" });
+    return;
+  }
+  const d = parsed.data;
+  db.prepare("UPDATE categories SET name = ?, description = ?, show_in_nav = ? WHERE slug = ?").run(d.name, d.description, d.showInNav ? 1 : 0, slug);
+  res.json({ category: rowToCategory(db.prepare("SELECT * FROM categories WHERE slug = ?").get(slug) as Row) });
+});
+
+adminRouter.delete("/categories/:slug", (req, res) => {
+  const slug = String(req.params.slug);
+  const inUse = countRows("posts", "WHERE category = ?", [slug]);
+  if (inUse > 0) {
+    res.status(400).json({ error: `This category still has ${inUse} post(s). Move them to another category first.` });
+    return;
+  }
+  db.prepare("DELETE FROM categories WHERE slug = ?").run(slug);
+  res.json({ ok: true });
+});
+
+adminRouter.post("/categories/reorder", (req, res) => {
+  const parsed = z.object({ slugs: z.array(z.string()).min(1) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "slugs required" });
+    return;
+  }
+  const stmt = db.prepare("UPDATE categories SET order_index = ? WHERE slug = ?");
+  parsed.data.slugs.forEach((slug, i) => stmt.run(i, slug));
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- Pages (footer/legal content)
+adminRouter.get("/pages", (_req, res) => {
+  res.json({ pages: loadPages() });
+});
+
+const pageSchema = z.object({
+  slug: z.string().trim().max(60).optional(),
+  title: z.string().trim().min(1).max(120),
+  content: z.string().max(100000).default(""),
+});
+
+adminRouter.post("/pages", (req, res) => {
+  const parsed = pageSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "A page needs a title." });
+    return;
+  }
+  const d = parsed.data;
+  let slug = slugify(d.slug || d.title);
+  let n = 1;
+  while (db.prepare("SELECT 1 FROM pages WHERE slug = ?").get(slug)) slug = `${slugify(d.slug || d.title)}-${++n}`;
+  db.prepare("INSERT INTO pages (slug, title, content, updated_at) VALUES (?, ?, ?, ?)").run(slug, d.title, d.content, nowIso());
+  res.status(201).json({ page: loadPage(slug) });
+});
+
+adminRouter.put("/pages/:slug", (req, res) => {
+  const slug = String(req.params.slug);
+  if (!loadPage(slug)) {
+    res.status(404).json({ error: "Page not found" });
+    return;
+  }
+  const parsed = pageSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid page data" });
+    return;
+  }
+  db.prepare("UPDATE pages SET title = ?, content = ?, updated_at = ? WHERE slug = ?").run(parsed.data.title, parsed.data.content, nowIso(), slug);
+  res.json({ page: loadPage(slug) });
+});
+
+adminRouter.delete("/pages/:slug", (req, res) => {
+  db.prepare("DELETE FROM pages WHERE slug = ?").run(String(req.params.slug));
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- Image uploads
+const ALLOWED_IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const SAFE_NAME = /^[a-z0-9][a-z0-9._-]{0,120}\.(png|jpg|jpeg|gif|webp)$/;
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+
+adminRouter.get("/uploads", (_req, res) => {
+  const files = fs
+    .readdirSync(UPLOADS_DIR)
+    .filter((f) => SAFE_NAME.test(f))
+    .map((f) => {
+      const st = fs.statSync(path.join(UPLOADS_DIR, f));
+      return { name: f, url: `/uploads/${f}`, size: st.size, modifiedAt: st.mtime.toISOString() };
+    })
+    .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+  res.json({ files });
+});
+
+adminRouter.post("/uploads", (req, res) => {
+  const parsed = z.object({ filename: z.string().trim().min(1).max(200), dataBase64: z.string().min(8) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "filename and dataBase64 are required" });
+    return;
+  }
+  const ext = path.extname(parsed.data.filename).toLowerCase();
+  if (!ALLOWED_IMAGE_EXT.has(ext)) {
+    res.status(400).json({ error: "Only png, jpg, jpeg, gif and webp images are allowed." });
+    return;
+  }
+  const b64 = parsed.data.dataBase64.replace(/^data:[^;]+;base64,/, "");
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(b64, "base64");
+  } catch {
+    res.status(400).json({ error: "Invalid base64 data" });
+    return;
+  }
+  if (buf.length < 16 || buf.length > MAX_UPLOAD_BYTES) {
+    res.status(400).json({ error: `Image must be between 16 bytes and ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.` });
+    return;
+  }
+  const base = slugify(path.basename(parsed.data.filename, ext)).slice(0, 40) || "image";
+  const name = `${base}-${Date.now().toString(36)}${crypto.randomBytes(3).toString("hex")}${ext}`;
+  fs.writeFileSync(path.join(UPLOADS_DIR, name), buf);
+  res.status(201).json({ name, url: `/uploads/${name}`, size: buf.length });
+});
+
+adminRouter.delete("/uploads/:name", (req, res) => {
+  const name = String(req.params.name);
+  if (!SAFE_NAME.test(name)) {
+    res.status(400).json({ error: "Invalid file name" });
+    return;
+  }
+  const full = path.join(UPLOADS_DIR, name);
+  if (fs.existsSync(full)) fs.unlinkSync(full);
   res.json({ ok: true });
 });
 

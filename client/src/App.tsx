@@ -1,52 +1,27 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Spinner } from "./components/ui";
 import { useAuth } from "./context/AuthContext";
 import Home from "./pages/Home";
-import LessonPage from "./pages/Lesson";
 
-const Courses = lazy(() => import("./pages/Courses"));
-const Blog = lazy(() => import("./pages/Blog"));
-const BlogPost = lazy(() => import("./pages/BlogPost"));
-const Resources = lazy(() => import("./pages/Resources"));
-const CheatSheet = lazy(() => import("./pages/CheatSheet"));
-const About = lazy(() => import("./pages/About"));
+const CategoryPage = lazy(() => import("./pages/CategoryPage"));
+const PostPage = lazy(() => import("./pages/PostPage"));
+const StaticPage = lazy(() => import("./pages/StaticPage"));
 const Contact = lazy(() => import("./pages/Contact"));
-const ContactForm = lazy(() => import("./pages/ContactForm"));
-const Pricing = lazy(() => import("./pages/Pricing"));
-const Privacy = lazy(() => import("./pages/Privacy"));
-const Terms = lazy(() => import("./pages/Terms"));
-const Notify = lazy(() => import("./pages/Notify"));
-const NotFound = lazy(() => import("./pages/NotFound"));
-const Playground = lazy(() => import("./pages/Playground"));
-const PipelineStep = lazy(() => import("./pages/PipelineStep"));
-const Signup = lazy(() => import("./pages/Signup"));
 const Login = lazy(() => import("./pages/Login"));
-const Progress = lazy(() => import("./pages/Progress"));
-const Profile = lazy(() => import("./pages/Profile"));
+const NotFound = lazy(() => import("./pages/NotFound"));
 
 const AdminLayout = lazy(() => import("./admin/AdminLayout"));
 const AdminDashboard = lazy(() => import("./admin/pages/Dashboard"));
+const AdminPosts = lazy(() => import("./admin/pages/BlogAdmin"));
+const AdminCategories = lazy(() => import("./admin/pages/CategoriesAdmin"));
+const AdminPages = lazy(() => import("./admin/pages/PagesAdmin"));
+const AdminMedia = lazy(() => import("./admin/pages/MediaAdmin"));
+const AdminInbox = lazy(() => import("./admin/pages/Inbox"));
 const AdminUsers = lazy(() => import("./admin/pages/Users"));
 const AdminUserDetail = lazy(() => import("./admin/pages/UserDetail"));
-const AdminCurriculum = lazy(() => import("./admin/pages/Curriculum"));
-const AdminBlog = lazy(() => import("./admin/pages/BlogAdmin"));
-const AdminPipeline = lazy(() => import("./admin/pages/PipelineAdmin"));
-const AdminResources = lazy(() => import("./admin/pages/ResourcesAdmin"));
-const AdminInbox = lazy(() => import("./admin/pages/Inbox"));
-const AdminWaitlist = lazy(() => import("./admin/pages/Waitlist"));
-const AdminSubscribers = lazy(() => import("./admin/pages/Subscribers"));
 const AdminSettings = lazy(() => import("./admin/pages/Settings"));
-const AdminTutor = lazy(() => import("./admin/pages/TutorLogs"));
-
-function RequireAuth({ children }: { children: ReactNode }) {
-  const { user, loading } = useAuth();
-  const location = useLocation();
-  if (loading) return <Spinner label="Loading" />;
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
-  return <>{children}</>;
-}
 
 function RequireAdmin({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -57,45 +32,37 @@ function RequireAdmin({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** Old lesson URLs (/lesson/:moduleId/:lessonId) map straight onto the converted articles. */
+function LessonRedirect() {
+  const { lessonId } = useParams();
+  return <Navigate to={`/blog/${lessonId}`} replace />;
+}
+
 export default function App() {
   return (
     <Suspense fallback={<Spinner label="Loading" className="min-h-[50vh]" />}>
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Home />} />
-          <Route path="/courses" element={<Courses />} />
-          <Route path="/lesson/:moduleId/:lessonId" element={<LessonPage />} />
-          <Route path="/blog" element={<Blog />} />
-          <Route path="/blog/:id" element={<BlogPost />} />
-          <Route path="/resources" element={<Resources />} />
-          <Route path="/resources/cheatsheet/:id" element={<CheatSheet />} />
-          <Route path="/about" element={<About />} />
+          <Route path="/category/:slug" element={<CategoryPage />} />
+          <Route path="/blog/:id" element={<PostPage />} />
+          <Route path="/p/:slug" element={<StaticPage />} />
           <Route path="/contact" element={<Contact />} />
-          <Route path="/contact/form" element={<ContactForm />} />
-          <Route path="/pricing" element={<Pricing />} />
-          <Route path="/privacy" element={<Privacy />} />
-          <Route path="/terms" element={<Terms />} />
-          <Route path="/notify" element={<Notify />} />
-          <Route path="/playground" element={<Playground />} />
-          <Route path="/pipeline/:stepId" element={<PipelineStep />} />
-          <Route path="/signup" element={<Signup />} />
           <Route path="/login" element={<Login />} />
-          <Route
-            path="/progress"
-            element={
-              <RequireAuth>
-                <Progress />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/profile"
-            element={
-              <RequireAuth>
-                <Profile />
-              </RequireAuth>
-            }
-          />
+
+          {/* Legacy URLs from the learning-platform era */}
+          <Route path="/blog" element={<Navigate to="/" replace />} />
+          <Route path="/about" element={<Navigate to="/p/about" replace />} />
+          <Route path="/privacy" element={<Navigate to="/p/privacy" replace />} />
+          <Route path="/terms" element={<Navigate to="/p/terms" replace />} />
+          <Route path="/contact/form" element={<Navigate to="/contact" replace />} />
+          <Route path="/lesson/:moduleId/:lessonId" element={<LessonRedirect />} />
+          <Route path="/courses" element={<Navigate to="/" replace />} />
+          <Route path="/playground" element={<Navigate to="/" replace />} />
+          <Route path="/pricing" element={<Navigate to="/" replace />} />
+          <Route path="/resources" element={<Navigate to="/" replace />} />
+          <Route path="/signup" element={<Navigate to="/login" replace />} />
+
           <Route path="*" element={<NotFound />} />
         </Route>
 
@@ -108,17 +75,15 @@ export default function App() {
           }
         >
           <Route index element={<AdminDashboard />} />
+          <Route path="posts" element={<AdminPosts />} />
+          <Route path="blog" element={<Navigate to="/admin/posts" replace />} />
+          <Route path="categories" element={<AdminCategories />} />
+          <Route path="pages" element={<AdminPages />} />
+          <Route path="media" element={<AdminMedia />} />
+          <Route path="inbox" element={<AdminInbox />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="users/:id" element={<AdminUserDetail />} />
-          <Route path="curriculum" element={<AdminCurriculum />} />
-          <Route path="blog" element={<AdminBlog />} />
-          <Route path="pipeline" element={<AdminPipeline />} />
-          <Route path="resources" element={<AdminResources />} />
-          <Route path="inbox" element={<AdminInbox />} />
-          <Route path="waitlist" element={<AdminWaitlist />} />
-          <Route path="subscribers" element={<AdminSubscribers />} />
           <Route path="settings" element={<AdminSettings />} />
-          <Route path="tutor" element={<AdminTutor />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Route>
       </Routes>

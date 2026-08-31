@@ -7,7 +7,7 @@
     scroll-behavior: smooth;
   }
   body {
-    @apply font-sans;
+    @apply font-sans bg-white text-slate-900;
   }
   h1,
   h2,
@@ -16,34 +16,34 @@
     @apply font-poppins;
   }
   ::selection {
-    @apply bg-blue-600 text-white;
+    @apply bg-amber-300 text-slate-900;
   }
 }
 
 @layer components {
   .eyebrow {
-    @apply text-[10px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-[0.4em];
+    @apply text-[10px] font-black text-amber-600 uppercase tracking-[0.4em];
   }
   .card {
-    @apply bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm;
+    @apply bg-white rounded-2xl border border-slate-200 shadow-sm;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl font-black text-xs uppercase tracking-widest transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none;
   }
   .btn-primary {
-    @apply btn bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-500/20;
+    @apply btn bg-amber-400 text-slate-900 hover:bg-amber-500 shadow-md shadow-amber-200;
   }
   .btn-secondary {
-    @apply btn bg-white dark:bg-slate-900 text-slate-900 dark:text-white border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800;
+    @apply btn bg-white text-slate-900 border border-slate-300 hover:border-amber-400 hover:bg-amber-50;
   }
   .btn-dark {
-    @apply btn bg-slate-900 dark:bg-slate-800 text-white hover:bg-blue-600;
+    @apply btn bg-slate-900 text-white hover:bg-amber-400 hover:text-slate-900;
   }
   .btn-ghost {
-    @apply btn text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800;
+    @apply btn text-slate-600 hover:bg-amber-50 hover:text-slate-900;
   }
   .input {
-    @apply w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-transparent focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:text-white transition-all outline-none placeholder:text-slate-400 font-medium;
+    @apply w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:border-amber-400 focus:ring-2 focus:ring-amber-300/40 transition-all outline-none placeholder:text-slate-400 font-medium;
   }
   .label {
     @apply text-[10px] font-black text-slate-400 uppercase tracking-widest px-1;
@@ -53,14 +53,14 @@
     width: 8px;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    @apply bg-slate-300 dark:bg-slate-700 rounded-full;
+    @apply bg-slate-300 rounded-full;
   }
   .custom-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
 }
 
-/* Code highlighting (see lib/highlight.ts) */
+/* Code highlighting (see lib/highlight.ts) - code blocks stay dark for contrast on the white theme */
 .tok-k {
   color: #c084fc;
 }
@@ -86,10 +86,10 @@
 
 /* Markdown code blocks */
 .md-code {
-  @apply rounded-2xl overflow-hidden border border-slate-700 bg-[#0f172a] my-6;
+  @apply rounded-2xl overflow-hidden border border-slate-800 bg-[#0f172a] my-6;
 }
 .md-code-bar {
-  @apply flex items-center px-4 py-2 bg-[#1e293b] border-b border-slate-700 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400;
+  @apply flex items-center px-4 py-2 bg-[#1e293b] border-b border-slate-700 text-[10px] font-black uppercase tracking-[0.2em] text-amber-400;
 }
 .md-code pre {
   @apply m-0 p-5 overflow-x-auto text-[13px] leading-relaxed text-slate-200 font-mono bg-transparent;
@@ -98,30 +98,21 @@
   @apply bg-transparent p-0 text-inherit font-mono;
 }
 .prose :where(code):not(:where(pre code)) {
-  @apply bg-slate-100 dark:bg-slate-800 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-md text-[0.85em] font-semibold;
+  @apply bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded-md text-[0.85em] font-semibold border border-amber-100;
 }
 .prose table {
   @apply text-sm;
 }
 .prose blockquote {
-  @apply border-l-4 border-blue-500 bg-blue-50/60 dark:bg-blue-900/10 rounded-r-xl px-5 py-1 not-italic font-medium;
+  @apply border-l-4 border-amber-400 bg-amber-50/70 rounded-r-xl px-5 py-1 not-italic font-medium;
 }
-
-/* CodeMirror integration */
-.cm-editor {
-  @apply text-[13px] font-mono;
-  height: 100%;
-}
-.cm-editor.cm-focused {
-  outline: none !important;
-}
-.cm-scroller {
-  font-family: "JetBrains Mono", ui-monospace, monospace !important;
+.prose img {
+  @apply rounded-2xl border border-slate-200 shadow-sm mx-auto;
 }
 
 /* Skeleton shimmer */
 .skeleton {
-  @apply bg-slate-200 dark:bg-slate-800 rounded-xl animate-pulse;
+  @apply bg-slate-200 rounded-xl animate-pulse;
 }
 
 @media print {

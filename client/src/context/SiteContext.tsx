@@ -30,8 +30,9 @@ interface SiteApi {
 
 const SiteContext = createContext<SiteApi | null>(null);
 
+// The public site is light-only (white + yellow theme); the toggle remains available inside the admin panel.
 function readTheme(): "light" | "dark" {
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+  return "light";
 }
 
 export function SiteProvider({ children }: { children: ReactNode }) {

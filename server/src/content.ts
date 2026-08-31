@@ -1,5 +1,5 @@
 import { db, parseJsonArray } from "./db.js";
-import type { ChartType, Lesson, Module, PipelineStep, Post, QuizQuestion, Resource } from "./types.js";
+import type { Category, ChartType, Lesson, Module, Page, PipelineStep, Post, QuizQuestion, Resource } from "./types.js";
 
 type Row = Record<string, any>;
 
@@ -95,7 +95,8 @@ export function rowToPost(r: Row): Post {
     title: r.title,
     excerpt: r.excerpt ?? "",
     content: r.content ?? "",
-    category: r.category ?? "Tutorial",
+    category: r.category ?? "python",
+    coverImage: r.cover_image ?? "",
     author: r.author ?? "PyData Team",
     readTime: r.read_time ?? "5 min read",
     published: !!r.published,
@@ -174,8 +175,42 @@ export function loadResources(): Resource[] {
   return rows.map(rowToResource);
 }
 
+export function rowToCategory(r: Row): Category {
+  return {
+    slug: r.slug,
+    name: r.name,
+    description: r.description ?? "",
+    orderIndex: Number(r.order_index) || 0,
+    showInNav: !!r.show_in_nav,
+  };
+}
+
+export function loadCategories(): Category[] {
+  const rows = db.prepare("SELECT * FROM categories ORDER BY order_index, name").all() as Row[];
+  return rows.map(rowToCategory);
+}
+
+export function loadCategory(slug: string): Category | null {
+  const r = db.prepare("SELECT * FROM categories WHERE slug = ?").get(slug) as Row | undefined;
+  return r ? rowToCategory(r) : null;
+}
+
+export function rowToPage(r: Row): Page {
+  return { slug: r.slug, title: r.title, content: r.content ?? "", updatedAt: r.updated_at };
+}
+
+export function loadPages(): Page[] {
+  const rows = db.prepare("SELECT * FROM pages ORDER BY slug").all() as Row[];
+  return rows.map(rowToPage);
+}
+
+export function loadPage(slug: string): Page | null {
+  const r = db.prepare("SELECT * FROM pages WHERE slug = ?").get(slug) as Row | undefined;
+  return r ? rowToPage(r) : null;
+}
+
 export interface SearchHit {
-  type: "lesson" | "post" | "pipeline" | "resource";
+  type: "post" | "page" | "category";
   id: string;
   title: string;
   subtitle: string;
@@ -187,37 +222,18 @@ export function searchAll(q: string, limit = 12): SearchHit[] {
   if (!term) return [];
   const like = `%${term}%`;
   const hits: SearchHit[] = [];
-
-  const lessons = db
-    .prepare(
-      `SELECT l.id, l.title, l.summary, l.module_id, m.title AS module_title FROM lessons l JOIN modules m ON m.id = l.module_id
-       WHERE l.published = 1 AND m.published = 1 AND (lower(l.title) LIKE ? OR lower(l.summary) LIKE ? OR lower(l.content) LIKE ?)
-       ORDER BY m.order_index, l.order_index LIMIT ?`,
-    )
-    .all(like, like, like, limit) as Row[];
-  for (const l of lessons) hits.push({ type: "lesson", id: l.id, title: l.title, subtitle: l.module_title, href: `/lesson/${l.module_id}/${l.id}` });
+  const catNames = new Map(loadCategories().map((c) => [c.slug, c.name]));
 
   const posts = db
     .prepare(`SELECT id, title, category FROM posts WHERE published = 1 AND (lower(title) LIKE ? OR lower(excerpt) LIKE ? OR lower(content) LIKE ?) ORDER BY published_at DESC LIMIT ?`)
     .all(like, like, like, limit) as Row[];
-  for (const p of posts) hits.push({ type: "post", id: p.id, title: p.title, subtitle: `Blog / ${p.category}`, href: `/blog/${p.id}` });
+  for (const p of posts) hits.push({ type: "post", id: p.id, title: p.title, subtitle: catNames.get(p.category) ?? p.category, href: `/blog/${p.id}` });
 
-  const steps = db
-    .prepare(`SELECT id, title, subtitle FROM pipeline_steps WHERE lower(title) LIKE ? OR lower(subtitle) LIKE ? OR lower(purpose) LIKE ? OR lower(key_concepts) LIKE ? ORDER BY number LIMIT ?`)
-    .all(like, like, like, like, limit) as Row[];
-  for (const s of steps) hits.push({ type: "pipeline", id: s.id, title: `${s.title} - ${s.subtitle}`, subtitle: "Data Science Pipeline", href: `/pipeline/${s.id}` });
+  const cats = db.prepare(`SELECT slug, name, description FROM categories WHERE lower(name) LIKE ? OR lower(description) LIKE ? ORDER BY order_index LIMIT 4`).all(like, like) as Row[];
+  for (const c of cats) hits.push({ type: "category", id: c.slug, title: c.name, subtitle: "Topic", href: `/category/${c.slug}` });
 
-  const res = db
-    .prepare(`SELECT id, name, description, category, url FROM resources WHERE lower(name) LIKE ? OR lower(description) LIKE ? ORDER BY order_index LIMIT ?`)
-    .all(like, like, limit) as Row[];
-  for (const r of res)
-    hits.push({
-      type: "resource",
-      id: String(r.id),
-      title: r.name,
-      subtitle: r.category === "cheatsheet" ? "Cheat sheet" : r.category === "tools" ? "Tool" : "Documentation",
-      href: r.category === "cheatsheet" ? `/resources/cheatsheet/${r.id}` : r.url,
-    });
+  const pages = db.prepare(`SELECT slug, title FROM pages WHERE lower(title) LIKE ? OR lower(content) LIKE ? ORDER BY slug LIMIT 4`).all(like, like) as Row[];
+  for (const p of pages) hits.push({ type: "page", id: p.slug, title: p.title, subtitle: "Page", href: `/p/${p.slug}` });
 
   return hits.slice(0, limit);
 }

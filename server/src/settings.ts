@@ -4,20 +4,19 @@ import type { SiteSettings, TutorSettings } from "./types.js";
 export const DEFAULT_SITE: SiteSettings = {
   siteName: "PyDataMaster",
   siteSuffix: "i.o.",
-  tagline: "The definitive interactive platform for Python Data Science learning. Master NumPy, Pandas, and Matplotlib.",
+  tagline: "Clear, practical articles on Python and its data libraries - NumPy, Pandas, Matplotlib and Seaborn.",
   hero: {
-    badge: "Level Up Your Data Career",
-    titleLine1: "Master Python",
-    titleLine2: "Data Science Libraries",
-    subtitle:
-      "The definitive interactive guide to NumPy, Pandas, and Matplotlib. Learn by doing with real lessons, quizzes, an in-browser Python playground and an AI tutor.",
-    primaryCta: "Start Module 1",
-    secondaryCta: "Live Playground",
+    badge: "Python Data Science Blog",
+    titleLine1: "Learn Python,",
+    titleLine2: "one article at a time",
+    subtitle: "Hands-on tutorials, library guides and reference articles on Python, NumPy, Pandas, Matplotlib and Seaborn - written for people who learn by doing.",
+    primaryCta: "Start reading",
+    secondaryCta: "Browse Python",
   },
   announcement: {
-    enabled: true,
-    text: "New: run real Python (NumPy, Pandas, Matplotlib) directly in your browser in the Playground.",
-    link: "/playground",
+    enabled: false,
+    text: "",
+    link: "",
   },
   social: {
     linkedin: "https://www.linkedin.com/",
@@ -28,13 +27,13 @@ export const DEFAULT_SITE: SiteSettings = {
   contactEmail: "hello@pydatamaster.io",
   footerCredit: "Crafted with love for Data Pros",
   features: {
-    playground: true,
-    aiTutor: true,
+    playground: false,
+    aiTutor: false,
     ads: false,
     blog: true,
-    pricing: true,
-    newsletter: true,
-    signup: true,
+    pricing: false,
+    newsletter: false,
+    signup: false,
   },
   pricing: {
     enabled: true,
@@ -94,6 +93,7 @@ export const DEFAULT_SITE: SiteSettings = {
     ],
   },
   adsense: { enabled: false, clientId: "" },
+  adsPlacements: { top: true, bottom: true, left: false, right: true, inContent: true },
 };
 
 export const DEFAULT_TUTOR_PROMPT = `You are PyDataBot, a friendly and expert Data Science Tutor for the PyDataMaster learning platform.

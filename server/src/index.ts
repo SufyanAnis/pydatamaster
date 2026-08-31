@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import { migrate, DB_PATH } from "./db.js";
+import { migrate, DB_PATH, UPLOADS_DIR } from "./db.js";
 import { attachUser } from "./auth.js";
 import { seedDatabase } from "./seed.js";
 import { authRouter } from "./routes/auth.js";
@@ -35,9 +35,10 @@ async function main() {
       credentials: true,
     }),
   );
-  app.use(express.json({ limit: "2mb" }));
+  app.use(express.json({ limit: "15mb" }));
   app.use(cookieParser());
   app.use(attachUser);
+  app.use("/uploads", express.static(UPLOADS_DIR, { maxAge: "7d", index: false }));
 
   app.get("/api/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
   app.use("/api/auth", authRouter);
